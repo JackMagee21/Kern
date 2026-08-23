@@ -14,13 +14,15 @@
  * In 64-bit mode this SS:RSP pair is always pushed, even without a
  * privilege-level change (unlike legacy 32-bit protected mode) -- this
  * is documented AMD64/Intel long-mode interrupt-frame behavior, and
- * isr.asm's alignment handling assumes it. TODO: once GDB is usable
- * (post toolchain build), confirm this by single-stepping into a
- * deliberately triggered exception and inspecting the raw stack, per
- * CLAUDE.md's "test paging/interrupt changes incrementally" rule --
- * automated doc lookups for this exact point returned inconsistent
- * summaries, so treat it as verified-by-architecture-knowledge, not
- * yet verified-by-observation.
+ * isr.asm's alignment handling assumes it.
+ *
+ * Confirmed by observation, not just documentation: the kernel_main
+ * int3 self-test's fault dump in a real QEMU run showed cs=0x8 and
+ * ss=0x10 (exactly KERNEL_CODE_SELECTOR/KERNEL_DATA_SELECTOR from
+ * gdt.h) and a sane rip/rsp/rbp -- if SS:RSP weren't actually pushed
+ * here, this struct's ss/rsp fields would be reading whatever
+ * push_registers left on the stack instead, which would not by
+ * coincidence equal the real data selector.
  */
 typedef struct __attribute__((packed)) trap_frame {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;

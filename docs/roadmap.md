@@ -22,7 +22,7 @@ higher-half long-mode transition) all actually work together.
 only map the low 8MiB of physical memory (2MiB pages, no 4KiB level) —
 replaced by a real VMM in Milestone 4.
 
-## 2. GDT + IDT + exception handlers — implemented, verification pending toolchain
+## 2. GDT + IDT + exception handlers — DONE
 **Proves:** visibility into faults — everything after this depends on being
 able to see *why* something broke instead of triple-faulting silently.
 **Deliverables:**
@@ -40,12 +40,13 @@ able to see *why* something broke instead of triple-faulting silently.
 - `libk/fmt.c/.h`: `u64_to_hex`, host-tested (`tests/host/test_fmt.c`).
 - `kernel/kernel.c`: calls `gdt_init()`/`idt_init()`, then deliberately
   triggers `int3` as a self-test that the fault-dump path works end to end.
-**Verification:** object/link-level checks done (NASM assembly, manual
-disassembly of the alignment-handling sequence, host `ld` exercising
-`boot/linker.ld`'s structure) — see ADR 0002 for exactly what was and
-wasn't checked. `tests/qemu/test_idt_selftest.sh` (boots, asserts the
-`#BP Breakpoint` dump at vector `0x3`) still needs the
-`x86_64-elf-gcc`/`binutils` AUR build to finish before it can run.
+**Verification:** `make run` boots the real ISO and prints `[OK] hello
+kernel` → `[OK] gdt/idt installed` → the `int3` self-test's fault dump
+(`#BP Breakpoint`, vector `0x3`, `cs=0x8`/`ss=0x10` matching the GDT
+exactly, sane `rip`/`rsp`/all GPRs). `tests/qemu/test_boot_serial.sh` and
+`tests/qemu/test_idt_selftest.sh` both pass. See ADR 0002 for the full
+verification trail (object/link-level checks done before the toolchain
+existed, plus what the live boot then confirmed).
 **Design record:** `docs/adr/0002-gdt-idt-exception-handling.md`.
 **Known limitation (accepted for this milestone only):** no TSS, no IST
 stacks — a fault while the kernel stack itself is corrupt (e.g. stack

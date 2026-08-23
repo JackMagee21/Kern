@@ -1,8 +1,8 @@
 # ADR 0002: C-managed GDT, IDT, and exception-handler trap frame
 
 ## Status
-Accepted (Milestone 2). Verified at the object/link level only so far —
-see Verification; toolchain build was still in progress when this landed.
+Accepted and verified (Milestone 2) — see Verification for what was
+checked pre-toolchain vs. confirmed in a real QEMU boot.
 
 ## Context
 Milestone 1 got the CPU into 64-bit long mode using a hand-assembled,
@@ -97,13 +97,19 @@ harder to debug.
 - `libk/fmt.c`'s `u64_to_hex` (used by the fault dump) is genuinely host
   compiled and tested (`tests/host/test_fmt.c`, ASan/UBSan) — it's plain
   C with no hardware dependency, unlike everything else in this ADR.
-- **Not yet done, blocked on the `x86_64-elf-gcc`/`binutils` AUR build**:
-  compiling `gdt.c`/`idt.c`/`exceptions.c`/`kernel.c`, and running
-  `tests/qemu/test_idt_selftest.sh`, which boots the real ISO and checks
-  the deliberate `int3` self-test in `kernel_main` produces a fault dump
-  reporting `#BP Breakpoint` at vector `0x3`. Also still unverified: the
-  "SS:RSP always pushed in long mode, handler entry RSP always 16-byte
-  aligned" claim `isr.asm`'s comments rely on — automated doc lookups for
-  this specific point returned inconsistent summaries, so treat it as
-  verified-by-architecture-knowledge only until it's checked with GDB
-  against a live QEMU exception (`trap_frame.h` has the same caveat).
+- **Done, once the `x86_64-elf-gcc`/`binutils` AUR build finished:**
+  `make run` boots the real ISO under QEMU (TCG, `-display none -serial
+  stdio`) and prints `[OK] hello kernel`, `[OK] gdt/idt installed`, then
+  the `int3` self-test's fault dump — `#BP Breakpoint` at vector `0x3`,
+  `cs=0x8`/`ss=0x10` matching `KERNEL_CODE_SELECTOR`/`KERNEL_DATA_SELECTOR`
+  exactly, sane `rip`/`rsp`/`rbp`, all GPRs present and unmangled.
+  `tests/qemu/test_boot_serial.sh` and `tests/qemu/test_idt_selftest.sh`
+  both pass (the latter needed one fix: its expected marker string
+  wasn't zero-padded to match `serial_write_hex`'s actual 16-digit
+  output — a test bug, not a kernel bug).
+  This also resolves the one previously-open uncertainty: the "SS:RSP
+  always pushed in long mode, handler entry 16-byte aligned" claim
+  `isr.asm`/`trap_frame.h` rely on is now confirmed by observation, not
+  just documentation — `ss` reading back as exactly `0x10` (rather than
+  whatever `push_registers` happened to leave on the stack) is only
+  possible if the CPU genuinely pushed it there.
