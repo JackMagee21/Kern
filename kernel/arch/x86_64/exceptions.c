@@ -2,7 +2,7 @@
 
 #include "idt.h"
 #include "trap_frame.h"
-#include "../drivers/serial.h"
+#include "../../drivers/serial.h"
 
 /* Intel SDM Vol. 3A Table 6-1 "Protected-Mode Exceptions and
    Interrupts". Vectors 22-27/31 are architecturally reserved; 28-30 are
