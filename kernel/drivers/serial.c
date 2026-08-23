@@ -2,6 +2,7 @@
 
 #include "serial.h"
 #include "../../libk/io.h"
+#include "../../libk/fmt.h"
 
 /*
  * COM1 16550 UART, base port 0x3f8. Register map (offset from base):
@@ -54,4 +55,11 @@ void serial_write(const char *s)
         serial_putc(*s);
         s++;
     }
+}
+
+void serial_write_hex(uint64_t value)
+{
+    char buf[17];
+    u64_to_hex(value, buf);
+    serial_write(buf);
 }
