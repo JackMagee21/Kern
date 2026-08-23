@@ -36,7 +36,7 @@ check() {
 
 check "[OK] gdt/idt installed"
 check "[PANIC] exception: #BP Breakpoint"
-check "vector:      0x3"
+check "vector:      0x0000000000000003"
 
 if [ "$fail" -ne 0 ]; then
     echo "--- captured serial output ---" >&2
