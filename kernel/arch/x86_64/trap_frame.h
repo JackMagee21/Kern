@@ -36,15 +36,17 @@ typedef struct __attribute__((packed)) trap_frame {
     uint64_t ss;
 } trap_frame_t;
 
-/* Defined in exceptions.c, called from kernel/arch/x86_64/isr.asm's
-   isr_common_stub. */
-void isr_handler(trap_frame_t *frame);
-
-/* Defined in irq_dispatch.c, called from kernel/arch/x86_64/irq.asm's
-   irq_common_stub (Milestone 5). Both share common_stub.inc's save/
-   align/restore sequence, so both take the identical trap_frame_t
-   pointer -- .vector is the literal IDT vector (32-47 for IRQs), not
-   the 0-15 IRQ line number. */
-void irq_handler(trap_frame_t *frame);
+/* Defined in exceptions.c/irq_dispatch.c, called from
+   kernel/arch/x86_64/isr.asm/irq.asm's common_stub.inc-based stubs.
+   Both return the trap_frame_t* to actually resume, which
+   common_stub.inc loads into RSP before the final iretq -- almost
+   always the same frame they were given (isr_handler always does;
+   exceptions never trigger a task switch), but irq_handler's timer
+   path can return a DIFFERENT task's saved frame (Milestone 6's
+   preemptive context switch: kernel/sched/scheduler.c). .vector is the
+   literal IDT vector that fired (32-47 for IRQs), not the 0-15 IRQ line
+   number. */
+trap_frame_t *isr_handler(trap_frame_t *frame);
+trap_frame_t *irq_handler(trap_frame_t *frame);
 
 #endif /* KERNEL_ARCH_X86_64_TRAP_FRAME_H */

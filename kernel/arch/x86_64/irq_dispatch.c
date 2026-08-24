@@ -16,14 +16,19 @@ void irq_register_handler(uint8_t irq_line, irq_handler_fn_t handler)
 }
 
 /* Called from irq.asm's irq_common_stub. frame->vector is the literal
-   IDT vector (32-47); the IRQ line is that minus IDT_IRQ_VECTOR_BASE. */
-void irq_handler(trap_frame_t *frame)
+   IDT vector (32-47); the IRQ line is that minus IDT_IRQ_VECTOR_BASE.
+   Returns whichever frame the registered handler chose to resume
+   (almost always the same one it was given -- see irq.h); an
+   unregistered line just resumes frame unchanged. */
+trap_frame_t *irq_handler(trap_frame_t *frame)
 {
     uint8_t irq_line = (uint8_t)(frame->vector - IDT_IRQ_VECTOR_BASE);
+    trap_frame_t *resume = frame;
 
     if (irq_line < IDT_NUM_IRQ_VECTORS && handlers[irq_line] != NULL) {
-        handlers[irq_line]();
+        resume = handlers[irq_line](frame);
     }
 
     pic_send_eoi(irq_line);
+    return resume;
 }

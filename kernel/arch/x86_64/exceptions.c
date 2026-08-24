@@ -61,8 +61,11 @@ static void dump_field(const char *label, uint64_t value)
    exception this handler returns from normally (iretq resumes right
    after the int3) instead of halting. This is what lets kernel_main's
    Milestone 2 self-test coexist with Milestone 5's requirement that the
-   kernel keep running after boot to service timer IRQs. */
-void isr_handler(trap_frame_t *frame)
+   kernel keep running after boot to service timer IRQs. Returns the
+   frame to resume (common_stub.inc loads this into RSP before iretq);
+   always the same frame it was given -- exceptions never trigger a
+   Milestone 6 task switch, only irq_handler's timer path does. */
+trap_frame_t *isr_handler(trap_frame_t *frame)
 {
     serial_write("\n[PANIC] exception: ");
     serial_write(exception_names[frame->vector]);
@@ -97,7 +100,7 @@ void isr_handler(trap_frame_t *frame)
     dump_field("  r15:         0x", frame->r15);
 
     if (frame->vector == 3) {
-        return;
+        return frame; /* resume exactly where interrupted; exceptions never trigger a task switch */
     }
 
     for (;;) {
