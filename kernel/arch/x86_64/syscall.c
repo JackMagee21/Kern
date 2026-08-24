@@ -2,6 +2,7 @@
 
 #include "syscall.h"
 #include "gdt.h"
+#include "msr.h"
 #include "../../drivers/console.h"
 #include "../../mm/vmm.h"
 #include "../../sched/scheduler.h"
@@ -38,20 +39,6 @@ extern void syscall_entry(void); /* syscall_entry.asm */
 uint64_t syscall_kernel_rsp;
 
 static uint64_t syscall_count;
-
-static void write_msr(uint32_t msr, uint64_t value)
-{
-    uint32_t lo = (uint32_t)(value & 0xffffffffu);
-    uint32_t hi = (uint32_t)(value >> 32);
-    __asm__ volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
-}
-
-static uint64_t read_msr(uint32_t msr)
-{
-    uint32_t lo, hi;
-    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
-    return ((uint64_t)hi << 32) | lo;
-}
 
 void syscall_init(void)
 {
