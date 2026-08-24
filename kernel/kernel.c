@@ -7,6 +7,7 @@
 #include "drivers/pic.h"
 #include "drivers/pit.h"
 #include "drivers/keyboard.h"
+#include "drivers/mouse.h"
 #include "drivers/pci.h"
 #include "drivers/rtc.h"
 #include "arch/x86_64/gdt.h"
@@ -291,10 +292,15 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write(" (different address spaces)\n");
 
     keyboard_init();
-    pic_clear_mask(0); /* IRQ0: timer */
-    pic_clear_mask(1); /* IRQ1: keyboard */
+    mouse_init();
+    pic_clear_mask(0);  /* IRQ0: timer */
+    pic_clear_mask(1);  /* IRQ1: keyboard */
+    pic_clear_mask(2);  /* IRQ2: master PIC's cascade line -- MUST be unmasked or IRQ8-15
+                            (the slave PIC, including IRQ12's mouse) can never reach the CPU
+                            at all, regardless of IRQ12's own mask bit (ADR 0016). */
+    pic_clear_mask(12); /* IRQ12: mouse */
     __asm__ volatile("sti");
-    console_write("[OK] pic/pit/keyboard initialized, IRQ0+IRQ1 unmasked\n");
+    console_write("[OK] pic/pit/keyboard/mouse initialized, IRQ0+IRQ1+IRQ2+IRQ12 unmasked\n");
 
     /* Milestone 5 self-test: wait for real IRQ0 ticks to accumulate
        instead of just checking pit_init() didn't crash -- proves the
