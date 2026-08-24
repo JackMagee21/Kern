@@ -55,7 +55,13 @@ static void dump_field(const char *label, uint64_t value)
 /* CLAUDE.md safety rule 6: on unrecoverable error, print full state to
    serial before halt -- never fail silently, never auto-reboot. There
    is no recovery path yet (no scheduler, no per-process fault
-   isolation), so every exception here is fatal. */
+   isolation), so every exception here is fatal, EXCEPT #BP (vector 3):
+   a breakpoint is architecturally meant to be resumable (that's the
+   entire point of int3 as a debugging primitive), so it's the one
+   exception this handler returns from normally (iretq resumes right
+   after the int3) instead of halting. This is what lets kernel_main's
+   Milestone 2 self-test coexist with Milestone 5's requirement that the
+   kernel keep running after boot to service timer IRQs. */
 void isr_handler(trap_frame_t *frame)
 {
     serial_write("\n[PANIC] exception: ");
@@ -89,6 +95,10 @@ void isr_handler(trap_frame_t *frame)
     dump_field("  r13:         0x", frame->r13);
     dump_field("  r14:         0x", frame->r14);
     dump_field("  r15:         0x", frame->r15);
+
+    if (frame->vector == 3) {
+        return;
+    }
 
     for (;;) {
         __asm__ volatile("cli; hlt");
