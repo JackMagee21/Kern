@@ -428,6 +428,19 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(frames_after_reap);
     console_write(" frames free, matches pre-creation baseline)\n");
 
+    /* Milestone 20 (ADR 0020): proves sys_wait REALLY blocked at least
+       once, not just that it eventually returned the right answer --
+       the fork/wait demo's parent calls sys_wait immediately after
+       sys_fork returns, almost certainly before the freshly created
+       child has had its first turn, so a zero count here would mean
+       this boot never actually exercised the new blocking path. */
+    if (syscall_get_wait_block_count() == 0) {
+        panic("blocking wait self-test failed: sys_wait never actually blocked");
+    }
+    console_write("[OK] blocking wait self-test passed, sys_wait genuinely blocked (0x");
+    console_write_hex(syscall_get_wait_block_count());
+    console_write(" turns) before the fork demo's child exited\n");
+
     /* Steady state: an interactive shell instead of a bare idle loop --
        this is what actually makes the kernel usable sitting at real
        hardware. Still just one more participant in the scheduler's

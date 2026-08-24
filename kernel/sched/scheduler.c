@@ -119,6 +119,7 @@ static trap_frame_t *timer_tick_handler(trap_frame_t *frame)
 
     tss_set_rsp0(current_task->kernel_stack_top);
     syscall_set_kernel_stack(current_task->kernel_stack_top);
+    syscall_set_user_rsp_slot(&current_task->saved_user_rsp); /* Milestone 20, ADR 0020 */
     scheduler_target_pml4 = current_task->pml4;
 
     return (trap_frame_t *)current_task->rsp;
@@ -231,12 +232,14 @@ void scheduler_init(void)
     bootstrap->id = 0;
     bootstrap->parent_id = 0; /* never exits, never collected -- harmless default */
     bootstrap->exit_code = 0;
+    bootstrap->saved_user_rsp = 0; /* never makes a syscall -- harmless default */
 
     current_task = bootstrap;
     scheduler_current_pml4 = bootstrap->pml4;
     scheduler_target_pml4 = bootstrap->pml4;
     tss_set_rsp0(0);
     syscall_set_kernel_stack(0);
+    syscall_set_user_rsp_slot(&bootstrap->saved_user_rsp); /* Milestone 20, ADR 0020 */
 
     irq_register_handler(0, timer_tick_handler);
 

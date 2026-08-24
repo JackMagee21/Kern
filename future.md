@@ -17,7 +17,7 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 19 (2026-08-24)
+## State as of Milestone 20 (2026-08-25)
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -81,26 +81,53 @@ the design reasoning and any real bugs found along the way.
     window (irreducible — they build the tables the direct-map depends
     on). See ADR 0019.
 
-**Testing state:** 19 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+20. **Genuinely blocking `sys_wait()`** — `sys_wait` (`kernel/arch/
+    x86_64/syscall.c`) no longer polls: it loops `scheduler_try_wait()`
+    then, if nothing matches yet, `sti; hlt; cli` and retries, relying
+    entirely on the already-existing preemptive scheduler to give other
+    tasks (including the reaper) their turns in between — no new
+    `TASK_BLOCKED` state or wake-list needed, since the calling task
+    just stays `TASK_READY` in the ordinary ready queue the whole time.
+    `kernel/user/fork_demo.asm` now makes exactly ONE `sys_wait` call
+    (its old poll-and-spin wrapper deleted) — proof by construction
+    that the call genuinely blocks. Found and fixed a real latent bug
+    this exposed: `syscall_entry.asm`'s `saved_user_rsp` was a single
+    bare global, safe only because syscalls used to be atomic w.r.t.
+    scheduling — moved to a per-task `task_t` field plus a
+    scheduler-maintained indirection pointer, the same per-task
+    redirection pattern already used for `syscall_kernel_rsp`/
+    `TSS.RSP0`. A new self-test (`syscall_get_wait_block_count()`)
+    proves the blocking path was actually taken, not just that the
+    right answer came back by luck — made deterministic (not a timing
+    race) by giving the fork demo's child a bounded spin longer than
+    the parent's worst-case scheduling delay. See ADR 0020.
+
+**Testing state:** 20 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Every milestone has its own dedicated smoke test; run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** thirteen milestones
-(9-19) all followed the same pattern — implement, boot in QEMU for
+**A note on process discipline that held up well:** fourteen milestones
+(9-20) all followed the same pattern — implement, boot in QEMU for
 real, fix what actually breaks, write the ADR describing what was
 tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15 and 17-19 all landed correctly on
+logical pieces. Milestones 10-15 and 17-20 all landed correctly on
 the first real boot; Milestone 9 (per-process address spaces) and
 Milestone 16 (PS/2 mouse) each hit one genuine bug that needed real
 diagnosis (not guessing) to fix — both are documented in detail in
 their ADRs (0009, 0016) specifically so the diagnostic *method*, not
 just the fix, is preserved for next time something in this territory
-breaks. Milestone 19 was also the first since Milestone 8 to need ZERO
-marker-text updates in any pre-existing smoke test — a sign the
-interface it touched (raw physical-address access) was internal enough
-that widening it didn't ripple into anything user-visible.
+breaks. Milestone 20 is its own diagnosis story worth naming
+separately: the `saved_user_rsp` bug (see item 20 above) was never
+observed as a live QEMU failure — it was found by reasoning through
+what "another task's syscall can now genuinely interleave" implies
+for existing global state, BEFORE writing the fix, matching CLAUDE.md's
+"diagnose first, don't guess" discipline applied prospectively rather
+than reactively. Milestone 19 was also the first since Milestone 8 to
+need ZERO marker-text updates in any pre-existing smoke test — a sign
+the interface it touched (raw physical-address access) was internal
+enough that widening it didn't ripple into anything user-visible.
 
 ## Explicitly flagged, NOT started — needs your decision
 
@@ -163,12 +190,14 @@ time:
   wasn't attempted inline with fork itself; Milestone 19's direct-map,
   ADR 0019, would make a page-fault-driven COW handler's own bookkeeping
   simpler to build on top of, once attempted).
-- **Synchronization/IPC — now with a concrete motivating case.**
-  Milestone 18's `sys_wait` is non-blocking specifically because no
-  blocking/sleep-queue scheduler primitive exists (ADR 0018) — a real
-  `wait()` needs exactly that, not just IPC in the abstract. Real IPC
-  (pipes, shared memory, signals) would additionally matter once
-  there's more than one reason for two processes to talk to each other.
+- **A real sleep-queue/wake scheduler primitive.** Milestone 20 made
+  `sys_wait` genuinely blocking (ADR 0020), but deliberately via a
+  one-off `sti; hlt; cli` retry loop scoped to just that syscall, not a
+  general primitive (no `TASK_BLOCKED` state, no wake-list) — the right
+  call for a single caller, but real IPC (pipes, shared memory,
+  signals) would need an actual blocked-task/wake-list mechanism once
+  there's a second real reason for two processes to synchronize, not
+  just "wait for one to exit."
 - **Cursor/graphics.** Milestone 16 built the mouse *input* path with
   nothing to draw a cursor on. A framebuffer console (flagged as future
   work back in ADR 0008, for UEFI-without-CSM compatibility too) would

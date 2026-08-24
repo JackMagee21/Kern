@@ -39,6 +39,16 @@ void syscall_init(void);
    shared one. */
 void syscall_set_kernel_stack(uint64_t top);
 
+/* Milestone 20 (ADR 0020): points syscall_entry.asm at the CURRENT
+   task's own saved_user_rsp slot (task_t, kernel/sched/task.h) instead
+   of a single shared scratch global -- necessary once sys_wait could
+   block with interrupts enabled, letting another task's own syscall
+   genuinely interleave. Called by the scheduler on every task switch,
+   same as syscall_set_kernel_stack()/tss_set_rsp0(). slot must outlive
+   the task (it's &task->saved_user_rsp, kept alive by the task_t
+   itself). */
+void syscall_set_user_rsp_slot(uint64_t *slot);
+
 /* Defined in irq_dispatch.c-style dispatch (here: syscall.c). Called
    from syscall_entry.asm; frame->rax selects the syscall, frame->rax
    is overwritten with the return value. */
@@ -50,13 +60,22 @@ void syscall_dispatch(syscall_frame_t *frame);
    counters. */
 uint64_t syscall_get_count(void);
 
-/* Milestone 18 (ADR 0018): the calling process's user-mode RSP at the
-   moment of the CURRENTLY EXECUTING syscall (syscall_entry.asm's
-   saved_user_rsp -- RSP is unchanged by the SYSCALL instruction itself,
-   so this is exactly what the user program's stack pointer was). Only
-   meaningful from within syscall_dispatch() (or something it calls,
-   e.g. sys_fork's task_fork()) -- reading it any other time would just
-   return whichever process most recently made a syscall, not anything
+/* Milestone 20 (ADR 0020): how many times sys_wait's blocking loop
+   actually took a sti/hlt/cli turn without finding a match yet -- see
+   syscall.c's doc comment. Zero would mean sys_wait never genuinely
+   blocked in this boot (every call happened to already have a match
+   ready), which kernel_main's self-test treats as a failure: it would
+   mean this milestone's behavior wasn't actually exercised. */
+uint64_t syscall_get_wait_block_count(void);
+
+/* Milestone 18 (ADR 0018); storage moved to the current task itself in
+   Milestone 20 (ADR 0020) -- the calling process's user-mode RSP at the
+   moment of the CURRENTLY EXECUTING syscall (RSP is unchanged by the
+   SYSCALL instruction itself, so this is exactly what the user
+   program's stack pointer was). Only meaningful from within
+   syscall_dispatch() (or something it calls, e.g. sys_fork's
+   task_fork()) -- reading it any other time would just return
+   whichever process most recently made a syscall, not anything
    meaningful. */
 uint64_t syscall_get_user_rsp(void);
 

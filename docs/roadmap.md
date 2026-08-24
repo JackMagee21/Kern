@@ -866,9 +866,72 @@ raw-physical-address consumer in this codebase). `vmm.c`'s own
 page-table bootstrap frames still need `VMM_IDENTITY_WINDOW_LIMIT` —
 irreducible, not an oversight.
 
-## 20. FS, SMP, and whatever's learned by then (sequence TBD)
+## 20. Genuinely blocking sys_wait() — DONE
+Motivated by Milestone 18's own named limitation (ADR 0018): `sys_wait`
+was non-blocking specifically because this kernel's syscalls ran fully
+non-preemptible (interrupts masked throughout, ADR 0007) — a real
+blocking wait needed a way to sleep with interrupts enabled and resume
+later, which didn't exist yet.
+**Proves:** a single `sys_wait` call from ring 3 now genuinely blocks
+until a matching child exits — no userspace poll loop needed anymore
+— and this was verified as ACTUALLY exercised (not just correct by
+luck), via a new self-test that panics if the blocking path was never
+taken.
+**Deliverables:**
+- `kernel/arch/x86_64/syscall.c`: `sys_wait()` rewritten as a loop —
+  `scheduler_try_wait()`, and if nothing matches yet, `sti; hlt; cli`
+  and retry — relying entirely on the ALREADY-EXISTING preemptive
+  round-robin scheduler to give other tasks (including the reaper) a
+  turn in between. No new `TASK_BLOCKED` state or wake-list: the
+  calling task stays `TASK_READY` in the ordinary ready queue the
+  whole time, just like `reaper_task`'s own pre-existing idle-`hlt`
+  pattern.
+- Found and fixed a genuine latent bug this change would otherwise have
+  exposed: `syscall_entry.asm`'s `saved_user_rsp` was a single bare
+  global, safe only because syscalls used to be atomic w.r.t.
+  scheduling. `kernel/sched/task.h` gained a per-task
+  `saved_user_rsp` field; `kernel/arch/x86_64/syscall.c` gained a
+  scheduler-maintained indirection pointer
+  (`syscall_set_user_rsp_slot()`, called from `scheduler.c`'s
+  `timer_tick_handler` on every switch, mirroring the existing
+  `syscall_kernel_rsp`/`TSS.RSP0` per-task pattern) so a blocked task's
+  own user-mode RSP survives arbitrarily many OTHER tasks' syscalls
+  happening while it waits.
+- `kernel/user/fork_demo.asm`: simplified to a single blocking
+  `sys_wait` call (old poll-and-spin wrapper deleted); child branch
+  gained a bounded 200,000-iteration `sys_nop` spin (same magnitude
+  `hello.asm`'s own `LOOP_COUNT` already uses) specifically to make the
+  new self-test's outcome deterministic rather than a timing race.
+- `kernel/kernel.c`: new self-test asserting
+  `syscall_get_wait_block_count() > 0` — panics if sys_wait never
+  actually took its blocking path this boot, since "returned the right
+  answer" alone doesn't distinguish a genuine block from a lucky
+  immediate success.
+**Verification:** `make run` boots and prints every Milestone 1-19
+marker unchanged plus `[OK] blocking wait self-test passed, sys_wait
+genuinely blocked (0xN turns)...`, N >= 1 confirmed empirically across
+5 repeat boots (N itself legitimately varies with host/QEMU timing —
+observed 1 or 2 — but was never 0, by construction, see ADR 0020).
+`-d int,cpu_reset` trace across a full boot: zero `#PF`/double-fault/
+reset events, only expected IRQ traffic and the pre-existing deliberate
+`#BP`. `tests/qemu/test_blocking_wait_selftest.sh` (new) independently
+checks the new marker, its nonzero turn count, and its ordering after
+the fork/wait exit-code check. All nineteen earlier smoke tests and all
+four host test suites re-verified passing with no code changes needed
+beyond one header-comment update
+(`test_fork_wait_selftest.sh`, "non-blocking" → current behavior; its
+actual assertions were already implementation-agnostic).
+**Design record:** `docs/adr/0020-blocking-wait.md`.
+**Known limitation (accepted for this milestone only):** a caller with
+no children at all blocks forever (same underlying "no live child
+list" tracking gap ADR 0018 already accepted, now surfacing as an
+infinite block instead of an infinite poll). `sys_wait` is still the
+ONLY blocking syscall — no general sleep-queue/wake primitive exists
+yet; a future IPC/synchronization milestone would need one.
 
-Milestone 20 is intentionally left as a one-line placeholder here — full
+## 21. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 21 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
@@ -880,9 +943,11 @@ synchronous mid-syscall resume that bypasses the normal `sysretq` path,
 flagged here rather than attempted casually), remaining memory maturity
 items (VMAs, demand paging/COW — now with both a concrete motivating use
 case, Milestone 18's eager fork copy, and the general physical
-direct-map, Milestone 19, to build it on top of), and synchronization/IPC
-(motivated by Milestone 18's polling `sys_wait`, which a real blocking
-wait needs) — plus a disk driver + real filesystem, ACPI-based shutdown,
-and SMP/networking, all explicitly flagged to the user rather than
-started, still awaiting a decision. See `future.md` for a fuller
+direct-map, Milestone 19, to build it on top of), and a real
+sleep-queue/wake scheduler primitive generalizing Milestone 20's
+one-off `sys_wait`-specific blocking loop, once a second real caller
+motivates it (real IPC — pipes, shared memory, signals — would need
+exactly this) — plus a disk driver + real filesystem, ACPI-based
+shutdown, and SMP/networking, all explicitly flagged to the user rather
+than started, still awaiting a decision. See `future.md` for a fuller
 continuation briefing.

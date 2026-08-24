@@ -104,6 +104,7 @@ task_t *task_create(void (*entry)(void))
     task->id = next_task_id++;
     task->parent_id = 0; /* kernel threads never exit and are never forked -- harmless default */
     task->exit_code = 0;
+    task->saved_user_rsp = 0; /* never makes a syscall -- harmless default */
     return task;
 }
 
@@ -214,6 +215,7 @@ task_t *task_create_user_image(const uint8_t *image_start, const uint8_t *image_
     task->id = next_task_id++;
     task->parent_id = 0; /* spawned directly by kernel_main -- orphan, nothing will ever wait() for it */
     task->exit_code = 0;
+    task->saved_user_rsp = 0; /* set for real by syscall_entry.asm the first time this task syscalls */
     return task;
 }
 
@@ -303,5 +305,6 @@ task_t *task_fork(task_t *parent, const syscall_frame_t *parent_frame, uint64_t 
     child->id = next_task_id++;
     child->parent_id = parent->id;
     child->exit_code = 0;
+    child->saved_user_rsp = 0; /* set for real by syscall_entry.asm the first time the child syscalls */
     return child;
 }

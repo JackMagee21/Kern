@@ -34,17 +34,36 @@
 #define SFMASK_VALUE 0x300u
 
 extern void syscall_entry(void); /* syscall_entry.asm */
-extern uint64_t saved_user_rsp;  /* syscall_entry.asm -- Milestone 18, see syscall_get_user_rsp() */
 
 /* Not static: syscall_entry.asm references this symbol directly
    (`extern syscall_kernel_rsp`) to find the stack to switch to. */
 uint64_t syscall_kernel_rsp;
 
+/* Milestone 20 (ADR 0020): not static -- syscall_entry.asm dereferences
+   this directly (`extern syscall_user_rsp_slot`) to find WHERE to save/
+   restore the current task's own user-mode RSP. Always points at the
+   currently-scheduled task's task_t::saved_user_rsp field (see
+   syscall_set_user_rsp_slot()'s doc comment, syscall.h). */
+uint64_t *syscall_user_rsp_slot;
+
 static uint64_t syscall_count;
+
+/* Milestone 20 (ADR 0020): incremented once per sti/hlt/cli cycle
+   sys_wait actually takes -- i.e. once per turn it found nothing yet
+   and genuinely blocked, as opposed to succeeding on its very first
+   check. Exists purely so kernel_main's self-test can prove sys_wait
+   REALLY blocked at least once (the fork/wait demo's parent calls
+   sys_wait immediately after sys_fork returns, almost certainly before
+   the freshly created child has even had its first turn -- but "the
+   right exit code came back" alone doesn't distinguish a genuine block
+   from a lucky immediate success, the same observability gap
+   syscall_get_count()/scheduler_reaped_count() already exist to close
+   for their own milestones). */
+static uint64_t sys_wait_block_count;
 
 uint64_t syscall_get_user_rsp(void)
 {
-    return saved_user_rsp;
+    return *syscall_user_rsp_slot;
 }
 
 void syscall_init(void)
@@ -61,6 +80,11 @@ void syscall_init(void)
 void syscall_set_kernel_stack(uint64_t top)
 {
     syscall_kernel_rsp = top;
+}
+
+void syscall_set_user_rsp_slot(uint64_t *slot)
+{
+    syscall_user_rsp_slot = slot;
 }
 
 static void sys_write(syscall_frame_t *frame)
@@ -97,30 +121,44 @@ static void sys_fork(syscall_frame_t *frame)
     frame->rax = child->id;
 }
 
-/* Milestone 18 (ADR 0018): NON-blocking. Syscalls in this kernel are
-   non-preemptible and run with interrupts masked the whole time
-   (SFMASK, syscall.c's syscall_init()) -- a genuinely BLOCKING wait()
-   would need to sleep with interrupts enabled and a way for something
-   else to wake this task back up, neither of which this kernel has yet
-   (no blocking/sleep-queue primitive exists at all -- flagged future
-   work, ADR 0018's Known Limitations). Instead: rdi = target pid (0 =
+/* Milestone 20 (ADR 0020): genuinely BLOCKING. rdi = target pid (0 =
    any child of the caller), rsi = optional user pointer to write the
-   exit code into (0 = caller doesn't want it, skip the write). Returns
-   the reaped child's pid in rax, or 0 if no exited-but-uncollected
-   child matches yet -- the caller is expected to poll (see
-   kernel/user/fork_demo.asm's wait loop), the same "hlt/spin until a
-   counter advances" pattern this kernel already uses everywhere else
-   for "wait for an async event", just done from ring 3 via repeated
-   syscalls instead of from kernel_main directly. */
+   exit code into (0 = caller doesn't want it, skip the write). Blocks
+   -- sti/hlt/cli, re-polling scheduler_try_wait() once per own turn --
+   until a matching exited-but-uncollected child appears, then returns
+   its pid in rax. Deliberately does NOT introduce a new TASK_BLOCKED
+   state or a wake-list: this task stays TASK_READY in the ordinary
+   ready queue the entire time, simply doing nothing useful on most of
+   its turns, and the ALREADY-EXISTING preemptive round-robin scheduler
+   (Milestone 6) is what actually gives every other task (including the
+   reaper, which is what produces a match) a chance to run in between.
+   Safe to re-enable interrupts here specifically because
+   syscall_get_user_rsp()'s storage was moved to be per-task this same
+   milestone -- see ADR 0020 for why the OLD single-global storage
+   would have been corrupted by another task's own syscall landing
+   while this one sits blocked. A caller with NO children at all (never
+   forked) blocks here forever -- an accepted known limitation, the
+   same missing "live child list" gap ADR 0018 already flagged, now
+   surfacing as an infinite block instead of an infinite userspace poll
+   loop. */
 static void sys_wait(syscall_frame_t *frame)
 {
     uint64_t target_pid = frame->rdi;
     uint64_t out_ptr = frame->rsi;
+    uint32_t caller_id = scheduler_current_task()->id;
 
     uint64_t exit_code = 0;
-    uint32_t reaped_pid = scheduler_try_wait(scheduler_current_task()->id, (uint32_t)target_pid, &exit_code);
+    uint32_t reaped_pid;
+    for (;;) {
+        reaped_pid = scheduler_try_wait(caller_id, (uint32_t)target_pid, &exit_code);
+        if (reaped_pid != 0) {
+            break;
+        }
+        sys_wait_block_count++;
+        __asm__ volatile("sti; hlt; cli");
+    }
 
-    if (reaped_pid != 0 && out_ptr != 0) {
+    if (out_ptr != 0) {
         if (!vmm_is_user_range(out_ptr, sizeof(uint64_t))) {
             frame->rax = (uint64_t)-1;
             return;
@@ -160,4 +198,9 @@ void syscall_dispatch(syscall_frame_t *frame)
 uint64_t syscall_get_count(void)
 {
     return syscall_count;
+}
+
+uint64_t syscall_get_wait_block_count(void)
+{
+    return sys_wait_block_count;
 }

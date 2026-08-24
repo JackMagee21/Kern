@@ -61,7 +61,22 @@
    (scheduler.c's collected_head) until scheduler_try_wait() is called
    with a matching caller_id/target_pid. exit_code is set by
    scheduler_exit_current() right before a task becomes TASK_ZOMBIE;
-   meaningless before that. */
+   meaningless before that.
+
+   saved_user_rsp (Milestone 20, ADR 0020, blocking wait): this task's
+   own user-mode RSP at the moment of whichever syscall it is CURRENTLY
+   executing -- meaningless while the task isn't mid-syscall. Used to
+   be a single bare global in syscall_entry.asm, safe only because
+   every syscall ran fully non-preemptible (ADR 0007); once sys_wait
+   could block WITH interrupts enabled, a second, unrelated task's own
+   syscall could enter and exit while the first sat blocked, and a
+   single shared global would get clobbered. Moved here (one slot per
+   task) plus a scheduler-maintained indirection pointer
+   (syscall_set_user_rsp_slot(), updated on every context switch in
+   scheduler.c's timer_tick_handler, the exact same per-task
+   redirection pattern already used for TSS.RSP0/syscall_kernel_rsp)
+   so a blocked task's own value survives arbitrarily many OTHER tasks'
+   syscalls happening while it waits. */
 typedef enum {
     TASK_READY,
     TASK_ZOMBIE,
@@ -78,6 +93,7 @@ typedef struct task {
     uint32_t id;
     uint32_t parent_id;
     uint64_t exit_code;
+    uint64_t saved_user_rsp;
 } task_t;
 
 /* 16KiB per task, fixed. CLAUDE.md: know the stack size for every

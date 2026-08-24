@@ -1,9 +1,9 @@
-; Milestone 18 (ADR 0018): exercises sys_fork (3) and the non-blocking
-; sys_wait (4) end to end from ring 3. Linked with the same
-; kernel/user/user.ld as kernel/user/hello.asm (same base address is
-; fine -- the two programs are never loaded into the same address space
-; at once, and kernel/mm/elf_loader.c always maps wherever a given
-; image's own program headers say).
+; Milestone 18 (ADR 0018): exercises sys_fork (3) and sys_wait (4) end
+; to end from ring 3. Linked with the same kernel/user/user.ld as
+; kernel/user/hello.asm (same base address is fine -- the two programs
+; are never loaded into the same address space at once, and
+; kernel/mm/elf_loader.c always maps wherever a given image's own
+; program headers say).
 ;
 ; Flow: forks once. The CHILD prints a message and exits with a
 ; specific, otherwise-arbitrary exit code (0x2a) the PARENT branch then
@@ -16,11 +16,12 @@
 ; exit-code propagation through sys_wait actually carries the real
 ; value the child exited with, not some fixed/garbage placeholder.
 ;
-; sys_wait is NON-BLOCKING (see syscall.c's doc comment for why a real
-; blocking wait doesn't exist yet), so the parent polls -- a handful of
-; sys_nop round-trips between each sys_wait attempt, just to avoid the
-; tightest possible spin; not required for correctness, since the timer
-; preempts fairly regardless.
+; Milestone 20 (ADR 0020): sys_wait is now genuinely BLOCKING -- the
+; parent makes exactly ONE sys_wait call (no userspace retry loop
+; anymore) and it doesn't return until the child has actually exited.
+; That single call succeeding (with the right exit code) is itself the
+; proof this milestone changed sys_wait's behavior, not just an
+; implementation detail underneath the same observable interface.
 
 default rel
 bits 64
@@ -39,24 +40,11 @@ _start:
     ; --- parent branch: rax = child's pid ---
     mov [child_pid], rax
 
-.wait_loop:
     mov rdi, [child_pid]
     lea rsi, [exit_code_buf]
-    mov eax, 4          ; SYS_WAIT
+    mov eax, 4          ; SYS_WAIT -- blocks until the child exits (Milestone 20)
     syscall
 
-    test rax, rax
-    jnz .got_child
-
-    mov rbx, 20          ; a short poll-spacing spin, not required for correctness
-.spin:
-    xor eax, eax         ; SYS_NOP
-    syscall
-    dec rbx
-    jnz .spin
-    jmp .wait_loop
-
-.got_child:
     mov rax, [exit_code_buf]
     cmp rax, 0x2a
     jne .parent_bad
@@ -83,6 +71,24 @@ _start:
     mov rsi, msg_child_len
     mov eax, 1             ; SYS_WRITE
     syscall
+
+    ; Milestone 20 (ADR 0020): a bounded sys_nop spin, same magnitude
+    ; hello.asm's own LOOP_COUNT already uses (Milestone 17) -- forces
+    ; this task to burn through several of ITS OWN scheduler turns
+    ; (never voluntarily yielding) before it can reach sys_exit. The
+    ; PARENT's own worst-case delay between sys_fork returning and
+    ; issuing its sys_wait syscall is bounded by the ready queue's own
+    ; length (a handful of tasks, one preemption each) -- this loop is
+    ; deliberately far larger than that, so the parent's sys_wait is
+    ; GUARANTEED to find nothing ready on its first check regardless of
+    ; host/QEMU timing, making kernel_main's blocking-wait self-test
+    ; (syscall_get_wait_block_count()) deterministic rather than a race.
+    mov rbx, 200000
+.child_spin:
+    xor eax, eax        ; SYS_NOP
+    syscall
+    dec rbx
+    jnz .child_spin
 
     mov edi, 0x2a
     mov eax, 2              ; SYS_EXIT(0x2a)

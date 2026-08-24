@@ -2,10 +2,13 @@
 # Milestone 18 (ADR 0018) smoke test: boot headless in QEMU and assert
 # sys_fork/sys_wait actually worked end to end -- a genuinely
 # independent child process ran (proving the address-space deep copy
-# was correct, not aliasing the parent), the parent's non-blocking
-# sys_wait eventually observed it exit, and the exit code sys_wait
-# reported back matches exactly what the child passed to sys_exit --
-# not just that neither syscall crashed the kernel.
+# was correct, not aliasing the parent), the parent's sys_wait
+# eventually observed it exit, and the exit code sys_wait reported back
+# matches exactly what the child passed to sys_exit -- not just that
+# neither syscall crashed the kernel. sys_wait became genuinely
+# blocking in Milestone 20 (ADR 0020, test_blocking_wait_selftest.sh);
+# this test's own assertions are implementation-agnostic and didn't
+# need to change.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
