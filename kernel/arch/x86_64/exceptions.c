@@ -75,6 +75,27 @@ trap_frame_t *isr_handler(trap_frame_t *frame)
     dump_field("  error_code:  0x", frame->error_code);
     if (frame->vector == 14) {
         dump_field("  cr2 (fault): 0x", read_cr2());
+        /* Intel SDM Vol. 3A Sec. 4.7 Table 4-12, page-fault error code
+           bits: 0=P (0=not-present, 1=protection violation), 1=W/R,
+           2=U/S, 3=RSVD (reserved-bit violation -- e.g. VMM_FLAG_NX
+           used before vmm_enable_nx() ran), 4=I/D (1=instruction
+           fetch, only meaningful once NX is actually enabled -- this
+           is what an NX violation looks like: I/D=1, P=1). Decoded
+           explicitly rather than left as a raw hex code for the same
+           reason every other field here is already spelled out:
+           CLAUDE.md safety rule 6, full state, not a puzzle to solve
+           after the fact. */
+        console_write("  pf reason:   ");
+        console_write((frame->error_code & (1u << 0)) ? "protection-violation" : "not-present");
+        console_write((frame->error_code & (1u << 1)) ? ", write" : ", read");
+        console_write((frame->error_code & (1u << 2)) ? ", user-mode" : ", supervisor-mode");
+        if (frame->error_code & (1u << 3)) {
+            console_write(", reserved-bit-violation");
+        }
+        if (frame->error_code & (1u << 4)) {
+            console_write(", instruction-fetch");
+        }
+        console_write("\n");
     }
 
     dump_field("  rip:         0x", frame->rip);
