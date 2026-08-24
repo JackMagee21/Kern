@@ -4,18 +4,10 @@
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "mm/pmm.h"
+#include "mm/heap.h"
+#include "panic.h"
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289u
-
-static void panic(const char *message)
-{
-    serial_write("[PANIC] ");
-    serial_write(message);
-    serial_write("\n");
-    for (;;) {
-        __asm__ volatile("cli; hlt");
-    }
-}
 
 void kernel_main(uint32_t magic, uint32_t mbi_addr)
 {
@@ -53,6 +45,43 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
         panic("pmm self-test failed: freed frame not reused");
     }
     serial_write("[OK] pmm self-test passed (alloc/free/reuse)\n");
+
+    heap_init();
+    serial_write("[OK] kernel heap initialized\n");
+
+    /* Milestone 4 self-test: allocate two distinct blocks, write and
+       read back distinct fill patterns (catches overlap bugs the
+       splitting/coalescing logic could introduce, not just NULL
+       returns), then free one and confirm the next allocation reuses
+       it -- same "prove it actually works, not just that init() didn't
+       crash" standard as Milestones 2/3's self-tests. */
+    uint8_t *heap_a = (uint8_t *)kmalloc(64);
+    uint8_t *heap_b = (uint8_t *)kmalloc(128);
+    if (heap_a == NULL || heap_b == NULL || heap_a == heap_b) {
+        panic("heap self-test failed: bad allocation");
+    }
+    for (int i = 0; i < 64; i++) {
+        heap_a[i] = 0xaa;
+    }
+    for (int i = 0; i < 128; i++) {
+        heap_b[i] = 0xbb;
+    }
+    for (int i = 0; i < 64; i++) {
+        if (heap_a[i] != 0xaa) {
+            panic("heap self-test failed: allocation A corrupted (overlap?)");
+        }
+    }
+    for (int i = 0; i < 128; i++) {
+        if (heap_b[i] != 0xbb) {
+            panic("heap self-test failed: allocation B corrupted (overlap?)");
+        }
+    }
+    kfree(heap_a);
+    void *heap_c = kmalloc(64);
+    if (heap_c != heap_a) {
+        panic("heap self-test failed: freed block not reused");
+    }
+    serial_write("[OK] heap self-test passed (alloc/write/verify/free/reuse)\n");
 
     /* Milestone 2 self-test: every exception handler is a terminal fault
        dump for now (no recovery/scheduler exists to resume into), so the
