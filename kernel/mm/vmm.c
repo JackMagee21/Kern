@@ -165,6 +165,59 @@ uint64_t vmm_create_address_space(void)
     return new_pml4_frame;
 }
 
+void vmm_destroy_address_space(uint64_t pml4_phys)
+{
+    uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_phys;
+
+    for (uint64_t i = 0; i < ENTRIES_PER_TABLE; i++) {
+        if (i == 0 || i == 511) {
+            continue; /* shared with the kernel and every other address space -- never freed here */
+        }
+        uint64_t pml4e = pml4[i];
+        if (!(pml4e & PTE_PRESENT)) {
+            continue;
+        }
+        uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4e & PTE_ADDR_MASK);
+
+        for (uint64_t j = 0; j < ENTRIES_PER_TABLE; j++) {
+            uint64_t pdpte = pdpt[j];
+            if (!(pdpte & PTE_PRESENT)) {
+                continue;
+            }
+            if (pdpte & PTE_PS) {
+                panic("vmm_destroy_address_space: unexpected 1GiB page in a process-private mapping");
+            }
+            uint64_t *pd = (uint64_t *)(uintptr_t)(pdpte & PTE_ADDR_MASK);
+
+            for (uint64_t k = 0; k < ENTRIES_PER_TABLE; k++) {
+                uint64_t pde = pd[k];
+                if (!(pde & PTE_PRESENT)) {
+                    continue;
+                }
+                if (pde & PTE_PS) {
+                    panic("vmm_destroy_address_space: unexpected 2MiB page in a process-private mapping");
+                }
+                uint64_t *pt = (uint64_t *)(uintptr_t)(pde & PTE_ADDR_MASK);
+
+                for (uint64_t l = 0; l < ENTRIES_PER_TABLE; l++) {
+                    uint64_t pte = pt[l];
+                    if (!(pte & PTE_PRESENT)) {
+                        continue;
+                    }
+                    if (pte & VMM_FLAG_OWNED) {
+                        pmm_free_frame(pte & PTE_ADDR_MASK);
+                    }
+                }
+                pmm_free_frame((uint64_t)(uintptr_t)pt);
+            }
+            pmm_free_frame((uint64_t)(uintptr_t)pd);
+        }
+        pmm_free_frame((uint64_t)(uintptr_t)pdpt);
+    }
+
+    pmm_free_frame(pml4_phys);
+}
+
 void vmm_unmap_page(uint64_t virt_addr)
 {
     uint64_t *pml4 = get_pml4();

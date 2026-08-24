@@ -6,6 +6,22 @@
 
 #define VMM_FLAG_WRITABLE (1ULL << 1)
 #define VMM_FLAG_USER     (1ULL << 2) /* Milestone 7: ring-3-accessible (U/S bit) */
+#define VMM_FLAG_OWNED    (1ULL << 9) /* bits 9-11 are AVL (available for OS use) at
+                                          every page-table level per Intel SDM Vol. 3A
+                                          Sec. 4.5 -- doesn't collide with any
+                                          hardware-defined bit. Marks a LEAF mapping
+                                          whose physical frame was pmm_alloc_frame()'d
+                                          specifically for it (e.g. a process's private
+                                          stack) as opposed to pointing at pre-existing/
+                                          shared/static memory (e.g. the ring-3 demo
+                                          program's code page, which lives in the
+                                          kernel image itself and was never pmm-
+                                          allocated). vmm_destroy_address_space() only
+                                          pmm_free_frame()s a leaf's target if this bit
+                                          is set -- omitting it on a shared mapping is
+                                          what prevents a process's teardown from
+                                          freeing memory another process (or the kernel
+                                          image) still needs. */
 
 /* Maps virt_addr -> phys_addr (both must be 4KiB-aligned), creating any
    missing intermediate page-table levels via the physical frame
@@ -66,6 +82,26 @@ uint64_t vmm_current_pml4(void);
    new. See ADR 0009 for the real bug found before this was shared.
    Panics if a frame can't be allocated. */
 uint64_t vmm_create_address_space(void);
+
+/* Tears down a per-process address space created by
+   vmm_create_address_space(): walks every PML4 entry EXCEPT [0] and
+   [511] (the shared identity map and kernel half -- never touched,
+   never freed, since they're owned by the kernel and every other
+   address space too), recursively frees every PDPT/PD/PT frame the
+   walk finds (always pmm-owned, since get_or_create_table always
+   allocates them fresh for a new address space), and pmm_free_frame()s
+   a leaf's target physical frame only if its VMM_FLAG_OWNED bit is
+   set. Finally frees the PML4 frame itself.
+
+   Caller's responsibility, not this function's: the address space
+   being destroyed must NOT be the currently active one (CR3 must
+   already point elsewhere) and nothing may still be executing on any
+   stack this teardown is about to free. See ADR 0010 for why process
+   exit can't do this teardown synchronously inside the exiting
+   process's own syscall handler -- both of those conditions are still
+   false at that point, the same category of hazard as ADR 0009's CR3-
+   switch-timing bug. */
+void vmm_destroy_address_space(uint64_t pml4_phys);
 
 /* Unmaps virt_addr if mapped; no-op otherwise. Does NOT free the
    underlying physical frame -- that's the caller's job (pmm_free_frame),
