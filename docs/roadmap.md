@@ -55,14 +55,42 @@ dedicated safe one. Revisit if/when that's actually observed, or
 alongside the scheduler once interrupts can land on arbitrary thread
 stacks.
 
-## 3. Physical frame allocator
+## 3. Physical frame allocator — DONE
+**Proves:** the kernel can actually discover and hand out real physical
+memory, one 4KiB frame at a time — everything Milestone 4 builds (page
+tables, kernel heap) needs frames to come from somewhere real.
+**Deliverables:**
+- `kernel/arch/x86_64/multiboot2.h`: Multiboot2 info-structure tag/mmap-
+  entry layout, verified against GRUB's own header (see ADR 0003).
+- `kernel/mm/pmm.c/.h`: bitmap frame allocator (128KiB bitmap, 4GiB
+  tracking limit), parses the real memory map via `mbi_addr` (received
+  since Milestone 1, unused until now), default-deny then carves out
+  reserved ranges (frame 0, kernel image, multiboot info structure).
+- `boot/linker.ld`, `kernel/arch/x86_64/boot.asm`: `__bss_start`/
+  `__bss_end` + an explicit `.bss` zero before `call kernel_main` — a
+  gap that predated this milestone (see ADR 0003) but only became
+  load-bearing once a subsystem's correctness actually depended on it.
+- `kernel/kernel.c`: calls `pmm_init(mbi_addr)`, prints the free/total
+  frame counts, then an alloc→alloc→free→realloc self-test.
+**Verification:** `make run` boots the real ISO and prints `[OK] pmm
+initialized, free frames: 0x7eaf / total: 0x100000` (126.7MiB free,
+4GiB tracked — both sanity-checkable, not just present) then `[OK] pmm
+self-test passed (alloc/free/reuse)`. `tests/qemu/test_pmm_selftest.sh`
+(new) plus the Milestone 1/2 smoke tests all re-verified passing after
+the `.bss` fix. See ADR 0003 for the full trail.
+**Design record:** `docs/adr/0003-physical-frame-allocator.md`.
+**Known limitation (accepted for this milestone only):** frames above
+4GiB physical are never tracked/allocatable (fixed-size bitmap, no heap
+yet to size one dynamically) — revisit only if a real target's RAM ever
+approaches that limit.
+
 ## 4. Paging/VMM + kernel heap
 ## 5. PIT/APIC timer + IRQ handling
 ## 6. Preemptive scheduler + context switch (single CPU)
 ## 7. Userspace: ring 3, syscalls, process model
 ## 8. Later: FS, drivers, SMP (sequence TBD from what's learned above)
 
-Milestones 3–8 are intentionally left as one-line placeholders here — full
+Milestones 4–8 are intentionally left as one-line placeholders here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
-against assumptions Milestones 1–2 might overturn.
+against assumptions already-implemented milestones might overturn.
