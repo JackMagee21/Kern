@@ -146,8 +146,23 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     scheduler_init();
     scheduler_add_task(task_create(demo_task_a));
     scheduler_add_task(task_create(demo_task_b));
-    scheduler_add_task(task_create_user());
-    console_write("[OK] scheduler initialized, 2 kernel + 1 ring-3 demo task created\n");
+
+    /* Two independent ring-3 processes, not one -- proves per-process
+       address spaces actually isolate rather than just "didn't crash
+       with one process like Milestone 7's shared design did." Safe to
+       reuse the same demo code (mapped read-only into both, ADR 0009);
+       each gets its own private stack and its own top-level page
+       table. */
+    task_t *process_a = task_create_user();
+    task_t *process_b = task_create_user();
+    scheduler_add_task(process_a);
+    scheduler_add_task(process_b);
+    console_write("[OK] scheduler initialized, 2 kernel + 2 ring-3 processes created\n");
+    console_write("[OK] process A pml4: 0x");
+    console_write_hex(process_a->pml4);
+    console_write(", process B pml4: 0x");
+    console_write_hex(process_b->pml4);
+    console_write(" (different address spaces)\n");
 
     keyboard_init();
     pic_clear_mask(0); /* IRQ0: timer */
@@ -183,18 +198,21 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(demo_task_b_ticks);
     console_write(" (both made progress under preemption)\n");
 
-    /* Milestone 7 self-test: by now the ring-3 demo task should have
-       made its one-shot sys_write call (proving the validated-pointer
-       path) and be well into its sys_nop loop (proving SYSCALL/SYSRET
-       round-trips reliably, not just once). syscall_get_count() covers
-       both syscalls, so ">1" is the meaningful bar: exactly the
-       sys_write call and nothing else would mean sys_nop never landed. */
+    /* Milestone 7/9 self-test: by now both ring-3 processes should have
+       made their one-shot sys_write calls (proving the validated-
+       pointer path, independently, from two different address spaces)
+       and be well into their sys_nop loops (proving SYSCALL/SYSRET
+       round-trips reliably under concurrent multi-process load, not
+       just once from one process). syscall_get_count() covers every
+       syscall from both processes, so ">1" remains the meaningful
+       floor: exactly one sys_write and nothing else would mean sys_nop
+       never landed. */
     if (syscall_get_count() <= 1) {
-        panic("syscall self-test failed: ring-3 task's syscalls did not land repeatedly");
+        panic("syscall self-test failed: ring-3 processes' syscalls did not land repeatedly");
     }
     console_write("[OK] syscall self-test passed, ");
     console_write_hex(syscall_get_count());
-    console_write(" syscalls serviced from ring 3\n");
+    console_write(" syscalls serviced from 2 ring-3 processes\n");
 
     /* Steady state: an interactive shell instead of a bare idle loop --
        this is what actually makes the kernel usable sitting at real
