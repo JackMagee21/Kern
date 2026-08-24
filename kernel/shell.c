@@ -5,6 +5,7 @@
 #include "drivers/keyboard.h"
 #include "drivers/pit.h"
 #include "drivers/rtc.h"
+#include "arch/x86_64/reboot.h"
 #include "../libk/fmt.h"
 
 #define SHELL_LINE_MAX 128
@@ -83,7 +84,10 @@ static void run_command(const char *line)
     }
 
     if (str_eq(line, "help")) {
-        console_write("commands: help, echo <text>, uptime, date, clear\n");
+        console_write("commands: help, echo <text>, uptime, date, reboot, clear\n");
+    } else if (str_eq(line, "reboot")) {
+        console_write("rebooting...\n");
+        reboot(); /* noreturn */
     } else if (str_eq(line, "uptime")) {
         console_write("ticks: 0x");
         console_write_hex(pit_get_ticks());
