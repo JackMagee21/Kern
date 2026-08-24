@@ -61,11 +61,17 @@ $(OS_ISO): $(KERNEL_ELF) boot/grub.cfg check-mb2
 	cp boot/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
 	$(GRUB_MKRESCUE) -o $@ $(ISO_DIR)
 
+# WSLg confirmed working on this machine (DISPLAY/WAYLAND_DISPLAY set,
+# /tmp/.X11-unix/X0 present) and qemu-ui-gtk is installed, so `run`/
+# `debug` open a real GTK window showing the VGA console -- serial
+# still goes to this terminal via -serial stdio. Every automated QEMU
+# smoke test (tests/qemu/*.sh) invokes qemu-system-x86_64 directly with
+# its own -display none, so this doesn't touch CI/test behavior.
 run: $(OS_ISO)
-	$(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display none
+	$(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk
 
 debug: $(OS_ISO)
-	$(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display none -s -S &
+	$(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk -s -S &
 	$(GDB) $(KERNEL_ELF) -ex "target remote :1234"
 
 clean:
