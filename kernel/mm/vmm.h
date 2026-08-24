@@ -6,6 +6,18 @@
 
 #define VMM_FLAG_WRITABLE (1ULL << 1)
 #define VMM_FLAG_USER     (1ULL << 2) /* Milestone 7: ring-3-accessible (U/S bit) */
+#define VMM_FLAG_NX       (1ULL << 63) /* execute-disable (XD) leaf bit -- Intel SDM
+                                           Vol. 3A Sec. 4.6, requires EFER.NXE=1
+                                           (vmm_enable_nx()) or this bit is reserved
+                                           and using it faults. Setting it on JUST the
+                                           leaf entry is sufficient to block instruction
+                                           fetch from that page regardless of
+                                           intermediate levels (get_or_create_table
+                                           never sets it on PDPT/PD/PT entries, so it
+                                           can't accidentally block execution anywhere
+                                           else) -- the SDM's "most restrictive wins"
+                                           rule applies the same way it does to U/S and
+                                           writable. */
 #define VMM_FLAG_OWNED    (1ULL << 9) /* bits 9-11 are AVL (available for OS use) at
                                           every page-table level per Intel SDM Vol. 3A
                                           Sec. 4.5 -- doesn't collide with any
@@ -45,6 +57,19 @@
    table permits, so this can't expose anything beyond the new mapping
    actually being created. */
 bool vmm_map_page(uint64_t virt_addr, uint64_t phys_addr, uint64_t flags);
+
+/* Verifies the CPU actually supports the NX/XD feature (CPUID
+   80000001h:EDX bit 20 -- the same extended leaf boot.asm's
+   check_long_mode already confirmed is available before long mode was
+   ever entered, so no need to re-check leaf 80000000h's own
+   availability here) and sets IA32_EFER.NXE, panicking if the CPU
+   doesn't support it rather than silently letting a later VMM_FLAG_NX
+   mapping fault with a confusing reserved-bit #PF. Must run before any
+   VMM_FLAG_NX mapping is ever walked by the CPU for a real access;
+   called once from kernel_main, early, well before either mapping that
+   currently uses VMM_FLAG_NX (the kernel heap, a process's stack) is
+   created. */
+void vmm_enable_nx(void);
 
 /* Same as vmm_map_page(), but into an EXPLICIT address space
    (pml4_phys, as returned by vmm_create_address_space()) rather than
@@ -118,5 +143,19 @@ void vmm_unmap_page(uint64_t virt_addr);
    kernel address and have the syscall read/write it with the kernel's
    own elevated privilege. */
 bool vmm_is_user_range(uint64_t addr, uint64_t length);
+
+/* Returns true only if virt_addr is present AND genuinely executable
+   (XD/VMM_FLAG_NX clear at whatever level is the actual leaf) in the
+   given address space -- i.e. reads back the real page-table state a
+   VMM_FLAG_NX mapping actually produced, rather than trusting that the
+   call site that created it got the flag right. Used by kernel_main's
+   NX self-test: proving NX is enforced by deliberately executing
+   NX-protected memory and observing the fault would need an exception-
+   recovery mechanism this kernel doesn't have yet (a fault, unlike a
+   trap, resumes AT the faulting instruction -- there's no safe generic
+   way to skip past it without one), so this checks the actual
+   resulting PTE bit instead -- a real, if more indirect, proof that
+   the plumbing took effect. */
+bool vmm_page_is_executable_in(uint64_t pml4_phys, uint64_t virt_addr);
 
 #endif /* KERNEL_MM_VMM_H */

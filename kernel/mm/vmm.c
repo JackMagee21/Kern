@@ -2,6 +2,7 @@
 
 #include "vmm.h"
 #include "pmm.h"
+#include "../arch/x86_64/msr.h"
 #include "../panic.h"
 
 /*
@@ -37,6 +38,27 @@
    this allocates lands well inside this window; get_or_create_table
    panics instead of silently corrupting memory if that's ever violated. */
 #define VMM_IDENTITY_WINDOW_LIMIT 0x800000ULL
+
+#define MSR_EFER 0xC0000080u /* same MSR syscall.c already programs EFER_SCE into */
+#define EFER_NXE (1ULL << 11)
+
+void vmm_enable_nx(void)
+{
+    /* CPUID 80000001h:EDX bit 20 = NX/XD available (Intel SDM Vol. 2A
+       Table 3-8 / AMD64 APM Vol. 3) -- the exact same extended leaf
+       boot.asm's check_long_mode already queried (bit 29, LM) before
+       this kernel ever reached long mode, so leaf 80000000h having
+       reported >= 80000001h is already a proven invariant by the time
+       any C code runs; only the NX bit itself needs checking here. */
+    uint32_t eax = 0x80000001u, edx;
+    __asm__ volatile("cpuid" : "+a"(eax), "=d"(edx) : : "ebx", "ecx");
+    if (!(edx & (1u << 20))) {
+        panic("vmm: CPU does not support the NX/XD feature (CPUID 80000001h:EDX bit 20)");
+    }
+
+    uint64_t efer = read_msr(MSR_EFER);
+    write_msr(MSR_EFER, efer | EFER_NXE);
+}
 
 static inline uint64_t pml4_index(uint64_t va) { return (va >> 39) & 0x1ff; }
 static inline uint64_t pdpt_index(uint64_t va) { return (va >> 30) & 0x1ff; }
@@ -279,6 +301,38 @@ static bool is_user_page(uint64_t virt_addr)
 
     uint64_t pte = pt[pt_index(virt_addr)];
     return (pte & PTE_PRESENT) && (pte & PTE_USER);
+}
+
+bool vmm_page_is_executable_in(uint64_t pml4_phys, uint64_t virt_addr)
+{
+    uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_phys;
+
+    uint64_t pml4e = pml4[pml4_index(virt_addr)];
+    if (!(pml4e & PTE_PRESENT)) {
+        return false;
+    }
+    uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4e & PTE_ADDR_MASK);
+
+    uint64_t pdpte = pdpt[pdpt_index(virt_addr)];
+    if (!(pdpte & PTE_PRESENT)) {
+        return false;
+    }
+    uint64_t *pd = (uint64_t *)(uintptr_t)(pdpte & PTE_ADDR_MASK);
+
+    uint64_t pde = pd[pd_index(virt_addr)];
+    if (!(pde & PTE_PRESENT)) {
+        return false;
+    }
+    if (pde & PTE_PS) {
+        return !(pde & VMM_FLAG_NX); /* 2MiB page (boot.asm's mappings): PDE is the leaf */
+    }
+    uint64_t *pt = (uint64_t *)(uintptr_t)(pde & PTE_ADDR_MASK);
+
+    uint64_t pte = pt[pt_index(virt_addr)];
+    if (!(pte & PTE_PRESENT)) {
+        return false;
+    }
+    return !(pte & VMM_FLAG_NX);
 }
 
 bool vmm_is_user_range(uint64_t addr, uint64_t length)
