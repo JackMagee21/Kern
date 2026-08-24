@@ -19,8 +19,9 @@ ASFLAGS := -f elf64
 BUILD_DIR := build
 ISO_DIR := $(BUILD_DIR)/iso
 
-C_SOURCES := kernel/kernel.c kernel/panic.c kernel/drivers/serial.c kernel/drivers/pic.c kernel/drivers/pit.c \
-             libk/fmt.c libk/heap_alloc.c \
+C_SOURCES := kernel/kernel.c kernel/panic.c kernel/shell.c kernel/drivers/serial.c kernel/drivers/vga.c kernel/drivers/console.c \
+             kernel/drivers/pic.c kernel/drivers/pit.c kernel/drivers/keyboard.c \
+             libk/fmt.c libk/heap_alloc.c libk/ring_buffer.c \
              kernel/arch/x86_64/gdt.c kernel/arch/x86_64/idt.c kernel/arch/x86_64/exceptions.c kernel/arch/x86_64/irq_dispatch.c \
              kernel/arch/x86_64/tss.c kernel/arch/x86_64/syscall.c \
              kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/heap.c \
