@@ -22,6 +22,7 @@ typedef struct __attribute__((packed)) {
 
 #define SYS_NOP   0
 #define SYS_WRITE 1
+#define SYS_EXIT  2
 
 /* Programs STAR/LSTAR/SFMASK and sets EFER.SCE. Must run after
    gdt_init() (STAR encodes GDT selector offsets) and tss_init().

@@ -4,6 +4,7 @@
 #include "gdt.h"
 #include "../../drivers/console.h"
 #include "../../mm/vmm.h"
+#include "../../sched/scheduler.h"
 
 /*
  * MSR numbers and the STAR encoding verified against Linux's own
@@ -95,6 +96,9 @@ void syscall_dispatch(syscall_frame_t *frame)
         break;
     case SYS_WRITE:
         sys_write(frame);
+        break;
+    case SYS_EXIT:
+        scheduler_exit_current(); /* noreturn -- never falls through to sysretq */
         break;
     default:
         frame->rax = (uint64_t)-1;
