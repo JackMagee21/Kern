@@ -34,16 +34,16 @@ check() {
 }
 
 check "[OK] tss/syscall initialized"
-check "[OK] scheduler initialized, 2 kernel + 1 ring-3 demo task created"
+check "[OK] scheduler initialized, 2 kernel + 2 ring-3 processes created"
 check "[OK] hello from ring 3 via syscall"
 check "[OK] syscall self-test passed, "
-check "syscalls serviced from ring 3"
+check "syscalls serviced from 2 ring-3 processes"
 
 # The ring-3 message must appear AFTER the scheduler creates the task,
 # not before -- proves the actual sequencing (task created, then
 # scheduled, then it ran in user mode and made a real syscall), not a
 # coincidental substring match.
-create_line=$(grep -n '\[OK\] scheduler initialized, 2 kernel + 1 ring-3 demo task created' "$SERIAL_LOG" | head -1 | cut -d: -f1)
+create_line=$(grep -n '\[OK\] scheduler initialized, 2 kernel + 2 ring-3 processes created' "$SERIAL_LOG" | head -1 | cut -d: -f1)
 hello_line=$(grep -n '\[OK\] hello from ring 3 via syscall' "$SERIAL_LOG" | head -1 | cut -d: -f1)
 if [ -z "$create_line" ] || [ -z "$hello_line" ] || [ "$create_line" -ge "$hello_line" ]; then
     echo "FAIL: ring-3 task's message did not appear after task creation as expected" >&2

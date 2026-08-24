@@ -31,7 +31,7 @@ check() {
     fi
 }
 
-check "[OK] scheduler initialized, 2 kernel + 1 ring-3 demo task created"
+check "[OK] scheduler initialized, 2 kernel + 2 ring-3 processes created"
 check "[OK] scheduler self-test passed, task A: 0x"
 check "(both made progress under preemption)"
 
