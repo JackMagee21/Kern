@@ -409,15 +409,66 @@ concept yet — every process is spawned directly by `kernel_main`); no
 `fork`/`exec`; still no ELF loader (the one demo program is embedded at
 link time). Revisit alongside a real process-creation syscall.
 
-## 11. FS, SMP, and whatever's learned by then (sequence TBD)
+## 11. NX (no-execute) enforcement — DONE
+Third step of the post-Milestone-8 "build this into an OS" inventory —
+the memory-maturity item "NX enforcement on data pages," tackled next
+since both writable regions that needed it (the kernel heap, a
+process's stack) already existed.
+**Proves:** the kernel heap and a ring-3 process's stack are genuinely
+non-executable at the hardware level (W^X) — a buffer overflow or
+stack-smashing attack landing bytes there can no longer be turned into
+code execution by jumping into either.
+**Deliverables:**
+- `kernel/arch/x86_64/msr.h` (new): `read_msr`/`write_msr`, factored
+  out of `syscall.c` once `vmm.c` needed the identical helpers for a
+  second MSR.
+- `kernel/mm/vmm.h/.c`: `VMM_FLAG_NX` (maps directly onto PTE bit 63);
+  `vmm_enable_nx()` (checks CPUID `80000001h:EDX` bit 20, panics if
+  unsupported, sets `EFER.NXE`); `vmm_page_is_executable_in()` (reads
+  back real page-table state for verification).
+- `kernel/mm/heap.c`, `kernel/sched/task.c`: the kernel heap and a
+  process's stack mappings both gained `VMM_FLAG_NX`; the demo
+  program's code mapping deliberately did not.
+- `kernel/arch/x86_64/exceptions.c`: `#PF` dumps now decode the error
+  code (present/write/user/reserved-bit/instruction-fetch) instead of
+  only printing the raw hex value.
+- `kernel/kernel.c`: calls `vmm_enable_nx()` early (before `pmm_init()`)
+  and a self-test confirming a live heap pointer is reported non-
+  executable while `kernel_main` itself is still reported executable.
+**Verification:** `make run` boots and prints `[OK] NX (no-execute)
+enabled` right after `[OK] gdt/idt installed`, then later `[OK] NX
+self-test passed (heap is non-executable, kernel code still is)`, with
+every Milestone 1-10 marker through the shell prompt unchanged
+afterward. `tests/qemu/test_nx_selftest.sh` (new) verifies both markers
+and that NX was enabled strictly before the heap was mapped. All ten
+earlier smoke tests and all three host tests re-verified passing.
+Booted 4 times back to back with identical output — correct on the
+first real attempt, no flakiness, same as Milestone 10.
+**Design record:** `docs/adr/0011-nx-enforcement.md` — including why
+verification checks the resulting PTE bit directly rather than
+triggering a live NX fault (no exception-recovery mechanism exists yet
+to safely resume past one; flagged as a deliberately deferred, more
+indirect form of proof, not smuggled past as equivalent).
+**Known limitation (accepted for this milestone only):** the kernel
+image itself (`.text`/`.rodata`/`.data`/`.bss`, boot.asm's coarse 2MiB
+mappings) isn't NX-hardened at all — `.data`/`.bss` are still
+executable in principle, since boot.asm maps the whole low 8MiB region
+as one set of 2MiB pages with no per-section granularity. Splitting
+that apart is a separate, larger paging change (already flagged as
+future work back in ADR 0004), not part of this step. No exception-
+recovery/signal-delivery mechanism exists yet, so a real NX violation
+still just halts the kernel rather than terminating only the
+offending process.
 
-Milestone 11 is intentionally left as a one-line placeholder here — full
+## 12. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 12 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
 an ELF loader + `fork`/`exec`, a disk driver + real filesystem, PCI
-enumeration, graphics/mouse/RTC/shutdown drivers, memory maturity (VMAs,
-demand paging/COW, NX, guard pages, a general physical direct-map), and
-synchronization/IPC — plus explicit SMP/networking non-goal decisions
-still needing the user's call.
+enumeration, graphics/mouse/RTC/shutdown drivers, remaining memory
+maturity items (VMAs, demand paging/COW, guard pages, a general physical
+direct-map), and synchronization/IPC — plus explicit SMP/networking
+non-goal decisions still needing the user's call.
