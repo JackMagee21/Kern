@@ -103,13 +103,19 @@ task_t *task_create_user(void)
        process's stack is private. VMM_FLAG_OWNED marks these frames as
        this process's own, so vmm_destroy_address_space() (ADR 0010)
        actually frees them back to the pmm on exit -- unlike the code
-       page above, which deliberately omits it. */
+       page above, which deliberately omits it. VMM_FLAG_NX (W^X):
+       nothing legitimate ever executes from a stack, and a writable
+       page a ring-3 program can fill with arbitrary bytes and then
+       jump into is exactly the classic stack-smashing code-injection
+       primitive -- marking it non-executable closes that off at the
+       page-table level regardless of what any particular program does
+       or doesn't check. */
     for (uint64_t off = 0; off < USER_STACK_SIZE; off += PMM_FRAME_SIZE) {
         uint64_t frame = pmm_alloc_frame();
         if (frame == 0) {
             panic("task_create_user: pmm exhausted mapping the user stack");
         }
-        if (!vmm_map_page_in(pml4, USER_STACK_VIRT_BASE + off, frame, VMM_FLAG_USER | VMM_FLAG_WRITABLE | VMM_FLAG_OWNED)) {
+        if (!vmm_map_page_in(pml4, USER_STACK_VIRT_BASE + off, frame, VMM_FLAG_USER | VMM_FLAG_WRITABLE | VMM_FLAG_OWNED | VMM_FLAG_NX)) {
             panic("task_create_user: failed to map user stack");
         }
     }

@@ -31,7 +31,12 @@ void heap_init(void)
         }
 
         uint64_t virt = KERNEL_HEAP_VIRT_BASE + i * PMM_FRAME_SIZE;
-        if (!vmm_map_page(virt, phys, VMM_FLAG_WRITABLE)) {
+        /* W^X: heap memory is data, never code -- VMM_FLAG_NX means an
+           overflow/corruption bug here can't be turned into arbitrary
+           code execution by jumping into attacker-controlled heap
+           content. Requires vmm_enable_nx() to have already run
+           (kernel_main calls it before heap_init()). */
+        if (!vmm_map_page(virt, phys, VMM_FLAG_WRITABLE | VMM_FLAG_NX)) {
             panic("heap_init: vmm_map_page failed for the initial kernel heap");
         }
     }
