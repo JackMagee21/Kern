@@ -19,15 +19,22 @@
                                            rule applies the same way it does to U/S and
                                            writable. */
 /* boot.asm's pd_shared covers physical 0-8MiB (ADR 0001) with 2MiB
-   identity pages; anything that needs to dereference a freshly
-   pmm_alloc_frame()'d frame directly as a pointer (page-table bootstrap
-   frames in vmm.c, and since Milestone 17 the ELF loader's segment
-   destination frames, kernel/mm/elf_loader.c) must land in that range
-   -- no general physical-memory direct-map exists yet (a known,
-   accepted limitation since ADR 0004). pmm_alloc_frame hands out the
-   lowest-numbered free frame first and both callers run early in boot,
-   so in practice this holds; each caller panics instead of silently
-   corrupting memory if it's ever violated, rather than assuming. */
+   identity pages. Since Milestone 19's general physical-memory
+   direct-map (vmm_direct_map_init()/vmm_phys_to_virt()), this
+   constraint applies ONLY to page-table BOOTSTRAP frames -- vmm.c's
+   own get_or_create_table()/vmm_create_address_space()/
+   vmm_direct_map_init() itself, which allocate the very page tables
+   everything else (including the direct map) depends on, and so can
+   never be bootstrapped via a direct map that doesn't exist yet at the
+   point they're needed. DATA frames (an ELF segment's content,
+   kernel/mm/elf_loader.c; a forked page's content,
+   kernel/sched/task.c's task_fork()) no longer need this -- they use
+   vmm_phys_to_virt() instead, and can be anywhere pmm_alloc_frame()
+   hands back. pmm_alloc_frame hands out the lowest-numbered free frame
+   first and every remaining caller of this constant runs early in
+   boot, so in practice it holds; each caller panics instead of
+   silently corrupting memory if it's ever violated, rather than
+   assuming. */
 #define VMM_IDENTITY_WINDOW_LIMIT 0x800000ULL
 
 #define VMM_FLAG_OWNED    (1ULL << 9) /* bits 9-11 are AVL (available for OS use) at
@@ -200,5 +207,27 @@ typedef void (*vmm_page_visitor_t)(uint64_t va, uint64_t phys, uint64_t flags, v
    vmm_destroy_address_space() already makes -- nothing in this codebase
    creates one there, so hitting one would mean a logic bug elsewhere. */
 void vmm_for_each_user_page(uint64_t pml4_phys, vmm_page_visitor_t visitor, void *ctx);
+
+/* Milestone 19: maps the full 4GiB physical-address range pmm.h's
+   bitmap tracks at a fixed high virtual base (2MiB pages, supervisor-
+   only), so any physical frame -- not just one inside
+   VMM_IDENTITY_WINDOW_LIMIT -- can be written to directly via
+   vmm_phys_to_virt(). MUST be called before the first
+   vmm_create_address_space() -- see vmm.c's doc comment on this
+   function for why. Panics if a page-table bootstrap frame it needs
+   falls outside VMM_IDENTITY_WINDOW_LIMIT (this function's OWN table
+   frames still need that, even though its whole purpose is to remove
+   the requirement for everything built on top of it afterward -- see
+   vmm.c). */
+void vmm_direct_map_init(void);
+
+/* Translates a physical address into its direct-map virtual address
+   (vmm_direct_map_init() must have already run). Does NOT validate
+   phys_addr is actually a frame pmm_alloc_frame() ever handed out --
+   same trust boundary as every other consumer of a raw physical
+   address in this codebase (get_or_create_table, vmm_translate's
+   callers, etc.): internal callers are trusted, not re-validated at
+   every layer. */
+uint64_t vmm_phys_to_virt(uint64_t phys_addr);
 
 #endif /* KERNEL_MM_VMM_H */

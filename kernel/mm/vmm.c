@@ -105,6 +105,77 @@ static uint64_t *get_or_create_table(uint64_t *table, uint64_t index, bool user)
     return (uint64_t *)(uintptr_t)(table[index] & PTE_ADDR_MASK);
 }
 
+/* Milestone 19: a general physical-memory direct-map, closing the ADR
+   0004 known limitation Milestones 17/18 both ran into a second and
+   third time (elf_load()'s segment frames, task_fork()'s copied
+   frames both needed to be directly writable via their own physical
+   address, the same identity-window constraint vmm.c's own page-table
+   bootstrap frames have always had). Covers the FULL 4GiB pmm.h's
+   bitmap tracks (PMM_FRAME bitmap size), unconditionally, regardless
+   of how much RAM is actually installed -- accessing an unbacked
+   physical address through it would only happen if a caller passes a
+   bogus frame number, a caller bug this function has no way to detect
+   (same trust boundary as every other pmm_alloc_frame() consumer).
+   Placed at PDPT[505..508] (4 x 1GiB, verified against ADR 0012's
+   established indices via python3, not guessed -- PDPT[509]=kernel
+   stacks, [510]=kernel image, [511]=heap, all under the SAME shared
+   PML4[511] entry, so 505-508 needed to be confirmed free of those,
+   not assumed), using 2MiB PS pages (the same encoding boot.asm's own
+   identity map already proved correct, Sec. 4.5) rather than 4KiB
+   pages -- 2048 PD entries total instead of over a million PT entries.
+
+   MUST run before the first vmm_create_address_space() call (i.e.
+   before any ring-3 process exists): PML4[511]'s entry is copied BY
+   REFERENCE into every new address space (ADR 0009), so the PDPT
+   entries this function adds are only automatically visible to future
+   processes if they already exist at that point -- kernel_main enforces
+   this ordering (called right after pmm_init(), before heap_init() or
+   any task_create_user()/task_fork()).
+
+   Does NOT replace vmm.c's own page-table BOOTSTRAP frames' identity-
+   window requirement (get_or_create_table above, and
+   vmm_create_address_space() below) -- those allocate the very tables
+   this function (and everything else) depends on, so they can't be
+   bootstrapped via a direct map that doesn't exist yet. This function
+   closes the gap for DATA frames (something's actual content, like an
+   ELF segment or a forked page) only. */
+#define DIRECT_MAP_VIRT_BASE  0xFFFFFFFE40000000ULL
+#define DIRECT_MAP_PDPT_START 505u
+#define DIRECT_MAP_PDPT_COUNT 4u /* 4 x 1GiB = 4GiB, matches pmm.h's PMM_FRAME bitmap tracking limit */
+#define PAGE_2MIB_SIZE         0x200000ULL
+
+void vmm_direct_map_init(void)
+{
+    uint64_t *pml4 = get_pml4();
+    uint64_t *pdpt = get_or_create_table(pml4, 511, false); /* shared kernel-half PDPT -- same one heap.c/task.c already extend */
+
+    uint64_t phys = 0;
+    for (uint64_t slot = 0; slot < DIRECT_MAP_PDPT_COUNT; slot++) {
+        uint64_t pd_frame = pmm_alloc_frame();
+        if (pd_frame == 0 || pd_frame >= VMM_IDENTITY_WINDOW_LIMIT) {
+            panic("vmm_direct_map_init: pmm exhausted or PD frame outside identity window");
+        }
+
+        /* New (previously-absent) mappings, not a present->present
+           change -- no invlpg needed (Intel SDM Vol. 3A Sec. 4.10: the
+           TLB never caches a not-present translation as valid, so
+           there's nothing stale to invalidate here), same reasoning
+           vmm_map_page_in()'s own doc comment already relies on. */
+        uint64_t *pd = (uint64_t *)(uintptr_t)pd_frame;
+        for (uint64_t i = 0; i < ENTRIES_PER_TABLE; i++) {
+            pd[i] = phys | PTE_PRESENT | PTE_WRITABLE | PTE_PS;
+            phys += PAGE_2MIB_SIZE;
+        }
+
+        pdpt[DIRECT_MAP_PDPT_START + slot] = pd_frame | PTE_PRESENT | PTE_WRITABLE;
+    }
+}
+
+uint64_t vmm_phys_to_virt(uint64_t phys_addr)
+{
+    return DIRECT_MAP_VIRT_BASE + phys_addr;
+}
+
 bool vmm_map_page_in(uint64_t pml4_phys, uint64_t virt_addr, uint64_t phys_addr, uint64_t flags)
 {
     bool user = (flags & VMM_FLAG_USER) != 0;

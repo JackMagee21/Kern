@@ -35,16 +35,21 @@ bool elf_load(uint64_t pml4_phys, const uint8_t *image, uint64_t image_size, uin
 
         for (uint64_t off = 0; off < phdr.p_memsz; off += PMM_FRAME_SIZE) {
             uint64_t frame = pmm_alloc_frame();
-            if (frame == 0 || frame >= VMM_IDENTITY_WINDOW_LIMIT) {
-                panic("elf_load: pmm exhausted or destination frame outside identity window");
+            if (frame == 0) {
+                panic("elf_load: pmm exhausted");
             }
 
-            /* Zero the whole frame first, THEN copy only the file-backed
-               portion over it -- this is what makes .bss (memsz > filesz,
-               the tail left unspecified by the file) come out zeroed
-               without a separate code path: any byte beyond p_filesz
-               within this segment just never gets overwritten below. */
-            uint8_t *dst = (uint8_t *)(uintptr_t)frame;
+            /* Milestone 19: written through the physical direct-map
+               (vmm_phys_to_virt()) now, not a raw identity-window cast
+               -- this frame doesn't need to fall within
+               VMM_IDENTITY_WINDOW_LIMIT anymore (ADR 0019). Zero the
+               whole frame first, THEN copy only the file-backed
+               portion over it -- this is what makes .bss (memsz >
+               filesz, the tail left unspecified by the file) come out
+               zeroed without a separate code path: any byte beyond
+               p_filesz within this segment just never gets overwritten
+               below. */
+            uint8_t *dst = (uint8_t *)(uintptr_t)vmm_phys_to_virt(frame);
             for (uint64_t b = 0; b < PMM_FRAME_SIZE; b++) {
                 dst[b] = 0;
             }

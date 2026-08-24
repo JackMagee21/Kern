@@ -17,7 +17,7 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 18 (2026-08-24)
+## State as of Milestone 19 (2026-08-24)
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -70,24 +70,37 @@ the design reasoning and any real bugs found along the way.
     real blocking wait needs a scheduler primitive that doesn't exist
     yet) — the caller polls, proven end to end by
     `kernel/user/fork_demo.asm`. See ADR 0018.
+19. **General physical-memory direct-map** — `vmm_direct_map_init()`/
+    `vmm_phys_to_virt()` (`kernel/mm/vmm.c`) map the full 4GiB `pmm.h`
+    tracks at a fixed virtual base (2MiB pages, under the shared
+    `PML4[511]` kernel-half entry). Closes the `VMM_IDENTITY_WINDOW_LIMIT`
+    constraint ADR 0004 flagged as revisit-when-needed, once Milestone
+    17's ELF loader and Milestone 18's `task_fork()` had both
+    independently hit it. `elf_load()`/`task_fork()` both switched over;
+    `vmm.c`'s own page-table bootstrap frames still need the identity
+    window (irreducible — they build the tables the direct-map depends
+    on). See ADR 0019.
 
-**Testing state:** 18 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+**Testing state:** 19 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Every milestone has its own dedicated smoke test; run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** twelve milestones
-(9-18) all followed the same pattern — implement, boot in QEMU for
+**A note on process discipline that held up well:** thirteen milestones
+(9-19) all followed the same pattern — implement, boot in QEMU for
 real, fix what actually breaks, write the ADR describing what was
 tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15, 17, and 18 all landed correctly on
+logical pieces. Milestones 10-15 and 17-19 all landed correctly on
 the first real boot; Milestone 9 (per-process address spaces) and
 Milestone 16 (PS/2 mouse) each hit one genuine bug that needed real
 diagnosis (not guessing) to fix — both are documented in detail in
 their ADRs (0009, 0016) specifically so the diagnostic *method*, not
 just the fix, is preserved for next time something in this territory
-breaks.
+breaks. Milestone 19 was also the first since Milestone 8 to need ZERO
+marker-text updates in any pre-existing smoke test — a sign the
+interface it touched (raw physical-address access) was internal enough
+that widening it didn't ripple into anything user-visible.
 
 ## Explicitly flagged, NOT started — needs your decision
 
@@ -113,26 +126,43 @@ These don't touch a non-goal and were the natural next items on the
 "build this into an OS" list this session worked through one at a
 time:
 
-- **A `sys_exec`-equivalent syscall.** Milestone 18 gave a running
-  process the ability to fork; it still can't replace its own image
-  with a different one. `elf_load()` (`kernel/mm/elf_loader.c`,
-  Milestone 17) doesn't care who invokes it — the natural next step is
-  a syscall that tears down the CALLING process's current mappings
-  (`vmm_for_each_user_page()`, Milestone 18, could drive that walk) and
-  calls `elf_load()` again with a DIFFERENT embedded image, then
-  resumes at the new entry point. Would need at least a second
-  meaningfully-different embedded program to select between (right now
-  there are two, `hello.asm` and `fork_demo.asm`, but neither was
-  written with "being exec'd into" in mind).
+- **A `sys_exec`-equivalent syscall — flagged here as GENUINELY HARDER
+  than it looks, not just another syscall.** Milestone 18 gave a
+  running process the ability to fork; it still can't replace its own
+  image with a different one, and `elf_load()`
+  (`kernel/mm/elf_loader.c`, Milestone 17) doesn't care who invokes
+  it — tearing down and rebuilding the calling process's mappings
+  (`vmm_for_each_user_page()`-style walk, Milestone 18, or a new
+  sibling of `vmm_destroy_address_space()` that resets a region without
+  freeing the PML4 itself) is the tractable half. The HARD half,
+  discovered while scoping this as this session's next milestone before
+  deliberately deferring it: `sys_exec` can never resume through the
+  normal `sysretq` epilogue `syscall_entry.asm` always takes, because
+  the OLD program (and its stack) is gone — it needs a genuinely NEW
+  control-flow primitive, a synchronous mid-syscall resume via `iretq`
+  into the freshly loaded image's entry point, built and installed
+  entirely within the syscall handler itself (unlike `sys_exit`, which
+  sidesteps this by never resuming ANYTHING again, or `sys_fork`, which
+  builds its synthetic frame for a DIFFERENT, not-yet-running task).
+  Also needs the reset+repopulate sequence to happen with interrupts
+  still masked throughout (already true for the whole syscall, but
+  worth stating explicitly: a timer tick landing mid-repopulation would
+  see a half-built address space) and a full TLB flush (`CR3` reload)
+  before ever resuming, since the new mappings can reuse virtual
+  addresses the old ones held with DIFFERENT physical frames. Would also
+  need at least a second meaningfully-different embedded program to
+  select between (there are two now, `hello.asm`/`fork_demo.asm`, but
+  neither was written with "being exec'd into" in mind). Worth reading
+  ADR 0009's CR3-switch-timing bug again before attempting this — it's
+  the closest prior art in this codebase for "state must be fully
+  consistent before you can safely resume through it."
 - **Remaining memory-maturity items**: VMAs (a real per-process memory
   map instead of a few hardcoded regions), demand paging / copy-on-write
   (Milestone 18's `sys_fork` is a full eager deep copy specifically
   because this doesn't exist yet — see ADR 0018 for why building COW
-  wasn't attempted inline with fork itself), a general physical-memory
-  direct-map (right now only the low 8MiB identity window is directly
-  writable for new page-table/ELF-segment/fork-destination frames —
-  ADR 0004's known limitation, still true, and now depended on by three
-  subsystems instead of one).
+  wasn't attempted inline with fork itself; Milestone 19's direct-map,
+  ADR 0019, would make a page-fault-driven COW handler's own bookkeeping
+  simpler to build on top of, once attempted).
 - **Synchronization/IPC — now with a concrete motivating case.**
   Milestone 18's `sys_wait` is non-blocking specifically because no
   blocking/sleep-queue scheduler primitive exists (ADR 0018) — a real

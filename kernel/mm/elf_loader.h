@@ -33,11 +33,10 @@
    simpler and correct, at the cost of duplicating physical memory for
    identical program text across processes running the same binary;
    revisit alongside demand paging/COW (already a flagged future-work
-   item, ADR 0004/0009). Every destination frame must fall within
-   VMM_IDENTITY_WINDOW_LIMIT (vmm.h) to be directly writable via its own
-   physical address as a pointer while filling it in -- panics rather
-   than silently corrupting memory if that's ever violated, same
-   discipline as vmm.c's own page-table bootstrap frames.
+   item, ADR 0004/0009). Every destination frame is filled in through
+   the physical direct-map (vmm_phys_to_virt(), Milestone 19/ADR 0019)
+   -- it no longer needs to fall within VMM_IDENTITY_WINDOW_LIMIT the
+   way it did through Milestone 18.
 
    On success, returns true and sets *out_entry to e_entry (the address
    task_create_user() sets the new process's trap-frame RIP to).

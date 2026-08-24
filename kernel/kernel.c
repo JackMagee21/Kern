@@ -133,6 +133,44 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     }
     console_write("[OK] pmm self-test passed (alloc/free/reuse)\n");
 
+    /* Milestone 19 (ADR 0019): must run before the first
+       vmm_create_address_space() call (before heap_init() is fine --
+       the heap doesn't create address spaces -- but well before
+       task_create_user()/task_fork() ever do), so the new PDPT
+       entries it adds under the shared PML4[511] are already present
+       when copied by reference into every future process's table
+       (ADR 0009). */
+    vmm_direct_map_init();
+    console_write("[OK] physical memory direct-map initialized\n");
+
+    /* Self-test: write a known pattern to a fresh frame through
+       vmm_phys_to_virt(), then read it back through a COMPLETELY
+       INDEPENDENT translation path -- the raw low identity mapping
+       boot.asm already set up (valid here specifically because only a
+       couple of frames have been allocated so far, so pmm_alloc_frame's
+       lowest-numbered-first policy guarantees this one is still well
+       within the low identity window, the same reasoning
+       VMM_IDENTITY_WINDOW_LIMIT's own doc comment relies on). Two
+       different address-translation paths agreeing on the same
+       physical byte is real evidence the direct-map's arithmetic is
+       correct, not just "reads back what it wrote through itself". */
+    uint64_t direct_map_test_frame = pmm_alloc_frame();
+    if (direct_map_test_frame == 0) {
+        panic("direct-map self-test failed: pmm exhausted");
+    }
+    uint8_t *via_direct_map = (uint8_t *)(uintptr_t)vmm_phys_to_virt(direct_map_test_frame);
+    for (int i = 0; i < 16; i++) {
+        via_direct_map[i] = (uint8_t)(0xd0 + i);
+    }
+    uint8_t *via_identity_map = (uint8_t *)(uintptr_t)direct_map_test_frame;
+    for (int i = 0; i < 16; i++) {
+        if (via_identity_map[i] != (uint8_t)(0xd0 + i)) {
+            panic("direct-map self-test failed: write via vmm_phys_to_virt not visible via the low identity mapping");
+        }
+    }
+    pmm_free_frame(direct_map_test_frame);
+    console_write("[OK] direct-map self-test passed (write via vmm_phys_to_virt visible via the low identity mapping)\n");
+
     heap_init();
     console_write("[OK] kernel heap initialized\n");
 

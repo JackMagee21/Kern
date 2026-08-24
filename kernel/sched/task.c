@@ -240,11 +240,13 @@ static void fork_copy_page(uint64_t va, uint64_t phys, uint64_t flags, void *ctx
     fork_copy_ctx_t *ctx = (fork_copy_ctx_t *)ctx_;
 
     uint64_t new_frame = pmm_alloc_frame();
-    if (new_frame == 0 || new_frame >= VMM_IDENTITY_WINDOW_LIMIT) {
-        panic("task_fork: pmm exhausted or destination frame outside identity window");
+    if (new_frame == 0) {
+        panic("task_fork: pmm exhausted");
     }
 
-    uint8_t *dst = (uint8_t *)(uintptr_t)new_frame;
+    /* Milestone 19: written through the physical direct-map, not a raw
+       identity-window cast -- see ADR 0019. */
+    uint8_t *dst = (uint8_t *)(uintptr_t)vmm_phys_to_virt(new_frame);
     const uint8_t *src = (const uint8_t *)(uintptr_t)va;
     for (uint64_t b = 0; b < PMM_FRAME_SIZE; b++) {
         dst[b] = src[b];

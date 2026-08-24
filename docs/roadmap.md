@@ -803,19 +803,86 @@ never-`wait()`-ed-for child's `task_t` struct would leak, though its
 memory is still reclaimed unconditionally by the reaper); no process
 groups, signals, or `SIGCHLD`-equivalent notification.
 
-## 19. FS, SMP, and whatever's learned by then (sequence TBD)
+## 19. General physical-memory direct-map — DONE
+Third of `future.md`'s "reasonable next steps": by Milestone 18, three
+separate subsystems (`vmm.c`'s own page-table bootstrap, Milestone 17's
+ELF loader, Milestone 18's `task_fork()`) independently depended on the
+same `VMM_IDENTITY_WINDOW_LIMIT` constraint ADR 0004 flagged as a known
+limitation to revisit "only when something actually needs more" — two
+real subsystems hitting it was that trigger.
+**Proves:** any physical frame `pmm_alloc_frame()` hands out — not just
+one inside the low 8MiB identity window — is directly writable via a
+new general-purpose translation, and the two subsystems that most
+needed this (the ELF loader, fork's page copy) work correctly through
+it with no regression.
+**Deliverables:**
+- `kernel/mm/vmm.h/.c`: `vmm_direct_map_init()` — maps the full 4GiB
+  `pmm.h` tracks at a fixed virtual base (`PDPT[505..508]`, verified
+  free via `python3`, under the SAME shared `PML4[511]` entry every
+  other kernel-half region already lives under, so it's automatically
+  visible from kernel code no matter which process's `CR3` is active)
+  using 2MiB `PTE_PS` pages, the same encoding `boot.asm`'s own
+  identity map already proved correct. `vmm_phys_to_virt()` — the
+  actual translation. Narrows (doesn't remove) the doc comment on
+  `VMM_IDENTITY_WINDOW_LIMIT`: it still applies to `vmm.c`'s own
+  page-table bootstrap frames (irreducible — they build the tables the
+  direct-map itself depends on) but no longer to DATA frames.
+- `kernel/mm/elf_loader.c`, `kernel/sched/task.c`: `elf_load()`'s
+  segment-destination writes and `task_fork()`'s `fork_copy_page()`
+  both switched from a raw identity-window-constrained pointer cast to
+  `vmm_phys_to_virt()`; both `>= VMM_IDENTITY_WINDOW_LIMIT` panic
+  checks removed (no longer a reachable failure mode for them).
+- `kernel/kernel.c`: calls `vmm_direct_map_init()` right after
+  `pmm_init()` — before `heap_init()` or any process/fork ever runs, an
+  ordering requirement (the direct-map's PDPT entries must already
+  exist the first time `PML4[511]` gets copied by reference into a new
+  process's table, ADR 0009) — then a self-test cross-checking a write
+  through `vmm_phys_to_virt()` against a read through the completely
+  independent low identity mapping.
+**Verification:** `make run` boots and prints `[OK] physical memory
+direct-map initialized` then `[OK] direct-map self-test passed (write
+via vmm_phys_to_virt visible via the low identity mapping)`, strictly
+before `[OK] kernel heap initialized`, with every Milestone 1-18 marker
+through the shell prompt unchanged afterward — including both
+downstream consumers' own self-tests (ELF `.data`/`.bss` verification,
+fork/wait exit-code verification), now exercising the new code path
+with no regression. `-d int,cpu_reset` trace across a full boot (per
+CLAUDE.md's explicit prescription for paging changes) showed zero
+`#PF`/double-fault/reset events, only the deliberate `#BP`.
+`tests/qemu/test_direct_map_selftest.sh` (new) independently checks
+both markers, their ordering relative to heap init, and that the
+downstream self-tests still pass. All eighteen earlier smoke tests and
+all four host test suites re-verified passing — the first milestone
+since Milestone 8 that needed ZERO marker-text updates to any existing
+test. Booted 4 times back to back with identical shape each time —
+correct on the first real attempt, no flakiness.
+**Design record:** `docs/adr/0019-physical-direct-map.md`.
+**Known limitation (accepted for this milestone only):** fixed 4GiB
+coverage, matching `pmm.h`'s own bitmap tracking limit exactly (not an
+independent new limitation — ADR 0003 already capped tracking there).
+`vmm_phys_to_virt()` doesn't validate its input is an actual
+`pmm_alloc_frame()`-issued frame (same trust boundary as every other
+raw-physical-address consumer in this codebase). `vmm.c`'s own
+page-table bootstrap frames still need `VMM_IDENTITY_WINDOW_LIMIT` —
+irreducible, not an oversight.
 
-Milestone 19 is intentionally left as a one-line placeholder here — full
+## 20. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 20 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
 a `sys_exec`-equivalent syscall (now that both a real loader, Milestone
-17, and real child processes, Milestone 18, exist to combine), remaining
-memory maturity items (VMAs, demand paging/COW — now with a concrete
-motivating use case, Milestone 18's eager fork copy — and a general
-physical direct-map), and synchronization/IPC (motivated by Milestone
-18's polling `sys_wait`, which a real blocking wait needs) — plus a disk
-driver + real filesystem, ACPI-based shutdown, and SMP/networking, all
-explicitly flagged to the user rather than started, still awaiting a
-decision. See `future.md` for a fuller continuation briefing.
+17, and real child processes, Milestone 18, exist to combine — though
+building it will need a genuinely new control-flow primitive, a
+synchronous mid-syscall resume that bypasses the normal `sysretq` path,
+flagged here rather than attempted casually), remaining memory maturity
+items (VMAs, demand paging/COW — now with both a concrete motivating use
+case, Milestone 18's eager fork copy, and the general physical
+direct-map, Milestone 19, to build it on top of), and synchronization/IPC
+(motivated by Milestone 18's polling `sys_wait`, which a real blocking
+wait needs) — plus a disk driver + real filesystem, ACPI-based shutdown,
+and SMP/networking, all explicitly flagged to the user rather than
+started, still awaiting a decision. See `future.md` for a fuller
+continuation briefing.
