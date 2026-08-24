@@ -147,6 +147,13 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     scheduler_add_task(task_create(demo_task_a));
     scheduler_add_task(task_create(demo_task_b));
 
+    /* Milestone 10 (ADR 0010) self-test setup: captured BEFORE either
+       process exists, so that once both have exited and been fully
+       reaped, comparing against this baseline proves every frame
+       vmm_create_address_space()/vmm_map_page_in() consumed for them
+       actually came back -- not just "didn't crash while freeing." */
+    uint64_t frames_before_processes = pmm_frames_free();
+
     /* Two independent ring-3 processes, not one -- proves per-process
        address spaces actually isolate rather than just "didn't crash
        with one process like Milestone 7's shared design did." Safe to
@@ -201,18 +208,37 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     /* Milestone 7/9 self-test: by now both ring-3 processes should have
        made their one-shot sys_write calls (proving the validated-
        pointer path, independently, from two different address spaces)
-       and be well into their sys_nop loops (proving SYSCALL/SYSRET
-       round-trips reliably under concurrent multi-process load, not
-       just once from one process). syscall_get_count() covers every
-       syscall from both processes, so ">1" remains the meaningful
-       floor: exactly one sys_write and nothing else would mean sys_nop
-       never landed. */
+       and either be deep into their bounded sys_nop loops or have
+       already run them to completion and exited (Milestone 10 -- see
+       user_demo.asm's LOOP_COUNT). Either way syscall_get_count() only
+       ever grows, so ">1" remains the meaningful floor: exactly one
+       sys_write and nothing else would mean sys_nop never landed. */
     if (syscall_get_count() <= 1) {
         panic("syscall self-test failed: ring-3 processes' syscalls did not land repeatedly");
     }
     console_write("[OK] syscall self-test passed, ");
     console_write_hex(syscall_get_count());
     console_write(" syscalls serviced from 2 ring-3 processes\n");
+
+    /* Milestone 10 (ADR 0010) self-test: both processes' user_demo.asm
+       runs a BOUNDED sys_nop loop specifically so this is observable --
+       wait (the same hlt-loop-until-a-counter-advances pattern as the
+       timer self-test above) for the reaper to have actually torn both
+       down, then confirm every frame their address spaces consumed
+       came back. A leak here would silently regress every future
+       milestone that creates and exits processes repeatedly (e.g. a
+       real shell running multiple programs) into slowly exhausting
+       physical memory. */
+    while (scheduler_reaped_count() < 2) {
+        __asm__ volatile("hlt");
+    }
+    uint64_t frames_after_reap = pmm_frames_free();
+    if (frames_after_reap != frames_before_processes) {
+        panic("process lifecycle self-test failed: frames leaked after both processes exited");
+    }
+    console_write("[OK] process lifecycle self-test passed, both ring-3 processes exited and were fully reaped (0x");
+    console_write_hex(frames_after_reap);
+    console_write(" frames free, matches pre-creation baseline)\n");
 
     /* Steady state: an interactive shell instead of a bare idle loop --
        this is what actually makes the kernel usable sitting at real
