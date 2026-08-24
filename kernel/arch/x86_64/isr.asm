@@ -27,6 +27,8 @@
 
 default abs
 
+%include "kernel/arch/x86_64/common_stub.inc"
+
 section .text
 bits 64
 
@@ -48,46 +50,7 @@ isr%1:
 %endmacro
 
 isr_common_stub:
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-
-    mov rbx, rsp          ; true frame pointer, preserved across the call (callee-saved)
-    mov rdi, rsp          ; arg 1: trap_frame_t *
-    and rsp, ~0xf         ; SysV ABI: RSP must be 16-byte aligned at `call`
-    call isr_handler
-    mov rsp, rbx          ; restore the true frame pointer
-
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-
-    add rsp, 16            ; discard vector number + error code
-    iretq
+    COMMON_STUB isr_handler
 
 ISR_NOERR 0
 ISR_NOERR 1
