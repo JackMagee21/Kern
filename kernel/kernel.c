@@ -11,6 +11,7 @@
 #include "arch/x86_64/tss.h"
 #include "arch/x86_64/syscall.h"
 #include "mm/pmm.h"
+#include "mm/vmm.h"
 #include "mm/heap.h"
 #include "sched/scheduler.h"
 #include "sched/task.h"
@@ -59,6 +60,14 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     gdt_init();
     idt_init();
     console_write("[OK] gdt/idt installed\n");
+
+    /* Milestone 11 (ADR 0011): must run before any VMM_FLAG_NX mapping
+       is created (heap_init() below, and every task_create_user()
+       process's stack) -- panics if the CPU doesn't actually support
+       NX rather than letting a later mapping fault with a confusing
+       reserved-bit #PF instead. */
+    vmm_enable_nx();
+    console_write("[OK] NX (no-execute) enabled\n");
 
     pmm_init(mbi_addr);
     console_write("[OK] pmm initialized, free frames: 0x");
@@ -119,6 +128,21 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
         panic("heap self-test failed: freed block not reused");
     }
     console_write("[OK] heap self-test passed (alloc/write/verify/free/reuse)\n");
+
+    /* Milestone 11 (ADR 0011) self-test: confirm heap_init()'s
+       VMM_FLAG_NX mapping actually produced a non-executable PTE, and
+       (so this isn't a spuriously-always-false check) that ordinary
+       kernel code is still correctly reported executable. Checking the
+       real page-table state, not triggering a live NX fault -- see
+       vmm_page_is_executable_in()'s doc comment for why: there's no
+       exception-recovery mechanism yet to safely resume past one. */
+    if (vmm_page_is_executable_in(vmm_current_pml4(), (uint64_t)(uintptr_t)heap_c)) {
+        panic("NX self-test failed: kernel heap page reported executable");
+    }
+    if (!vmm_page_is_executable_in(vmm_current_pml4(), (uint64_t)(uintptr_t)kernel_main)) {
+        panic("NX self-test failed: ordinary kernel code reported non-executable");
+    }
+    console_write("[OK] NX self-test passed (heap is non-executable, kernel code still is)\n");
 
     /* Milestone 2 self-test: deliberately take a #BP fault and check its
        dump reports the right vector -- exceptions.c's isr_handler
