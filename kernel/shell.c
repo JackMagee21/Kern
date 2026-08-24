@@ -1,10 +1,12 @@
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "shell.h"
 #include "drivers/console.h"
 #include "drivers/keyboard.h"
 #include "drivers/pit.h"
 #include "drivers/rtc.h"
+#include "drivers/mouse.h"
 #include "arch/x86_64/reboot.h"
 #include "../libk/fmt.h"
 
@@ -84,7 +86,36 @@ static void run_command(const char *line)
     }
 
     if (str_eq(line, "help")) {
-        console_write("commands: help, echo <text>, uptime, date, reboot, clear\n");
+        console_write("commands: help, echo <text>, uptime, date, mouse, reboot, clear\n");
+    } else if (str_eq(line, "mouse")) {
+        console_write("waiting for a mouse event (move it or click)...\n");
+        while (!mouse_has_event()) {
+            __asm__ volatile("hlt");
+        }
+        mouse_event_t event = mouse_get_event();
+        char digits[11];
+
+        console_write("dx=");
+        if (event.dx < 0) {
+            console_putc('-');
+        }
+        u32_to_dec((uint32_t)(event.dx < 0 ? -event.dx : event.dx), digits);
+        console_write(digits);
+
+        console_write(" dy=");
+        if (event.dy < 0) {
+            console_putc('-');
+        }
+        u32_to_dec((uint32_t)(event.dy < 0 ? -event.dy : event.dy), digits);
+        console_write(digits);
+
+        console_write(" buttons: L=");
+        console_putc(event.left ? '1' : '0');
+        console_write(" R=");
+        console_putc(event.right ? '1' : '0');
+        console_write(" M=");
+        console_putc(event.middle ? '1' : '0');
+        console_write("\n");
     } else if (str_eq(line, "reboot")) {
         console_write("rebooting...\n");
         reboot(); /* noreturn */
