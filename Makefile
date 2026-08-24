@@ -20,7 +20,8 @@ BUILD_DIR := build
 ISO_DIR := $(BUILD_DIR)/iso
 
 C_SOURCES := kernel/kernel.c kernel/drivers/serial.c libk/fmt.c \
-             kernel/arch/x86_64/gdt.c kernel/arch/x86_64/idt.c kernel/arch/x86_64/exceptions.c
+             kernel/arch/x86_64/gdt.c kernel/arch/x86_64/idt.c kernel/arch/x86_64/exceptions.c \
+             kernel/mm/pmm.c
 ASM_SOURCES := kernel/arch/x86_64/boot.asm kernel/arch/x86_64/gdt_flush.asm kernel/arch/x86_64/isr.asm
 
 C_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
