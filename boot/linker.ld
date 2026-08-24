@@ -53,22 +53,6 @@ SECTIONS
         *(.text*)
     }
 
-    /* Milestone 7: the ring-3 demo program's raw machine code
-       (kernel/sched/user_demo.asm), isolated on its own page(s) --
-       padded to a full 4KiB boundary on both sides so that when
-       task_create_user() maps this physical range into the dedicated
-       user virtual region with the U/S bit set, no OTHER kernel code or
-       data sharing the same physical page gets exposed to ring 3 along
-       with it (the U bit is a per-4KiB-frame grant, not
-       per-symbol/per-section). See ADR 0007. */
-    .user_demo ALIGN(4K) : AT(ADDR(.user_demo) - KERNEL_VMA_OFFSET)
-    {
-        *(.user_demo)
-        . = ALIGN(4K);
-    }
-    user_demo_start_lma = ADDR(.user_demo) - KERNEL_VMA_OFFSET;
-    user_demo_end_lma   = ADDR(.user_demo) + SIZEOF(.user_demo) - KERNEL_VMA_OFFSET;
-
     .rodata ALIGN(4K) : AT(ADDR(.rodata) - KERNEL_VMA_OFFSET)
     {
         *(.rodata*)

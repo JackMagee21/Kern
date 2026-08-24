@@ -335,7 +335,8 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        pointer path, independently, from two different address spaces)
        and either be deep into their bounded sys_nop loops or have
        already run them to completion and exited (Milestone 10 -- see
-       user_demo.asm's LOOP_COUNT). Either way syscall_get_count() only
+       kernel/user/hello.asm's LOOP_COUNT, Milestone 17). Either way
+       syscall_get_count() only
        ever grows, so ">1" remains the meaningful floor: exactly one
        sys_write and nothing else would mean sys_nop never landed. */
     if (syscall_get_count() <= 1) {
@@ -345,8 +346,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(syscall_get_count());
     console_write(" syscalls serviced from 2 ring-3 processes\n");
 
-    /* Milestone 10 (ADR 0010) self-test: both processes' user_demo.asm
-       runs a BOUNDED sys_nop loop specifically so this is observable --
+    /* Milestone 10 (ADR 0010) self-test: both processes' loaded program
+       (kernel/user/hello.asm, Milestone 17) runs a BOUNDED sys_nop loop
+       specifically so this is observable --
        wait (the same hlt-loop-until-a-counter-advances pattern as the
        timer self-test above) for the reaper to have actually torn both
        down, then confirm every frame their address spaces consumed

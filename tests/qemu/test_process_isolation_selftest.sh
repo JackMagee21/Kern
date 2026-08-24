@@ -47,9 +47,10 @@ elif [ "$pml4_a" = "$pml4_b" ]; then
 fi
 
 # Both processes' own "hello from ring 3" message must appear exactly
-# twice -- proves BOTH independently ran the shared, read-only-mapped
-# code page and made their own validated syscall, not just one of them.
-hello_count=$(grep -cF "[OK] hello from ring 3 via syscall" "$SERIAL_LOG" 2>/dev/null || true)
+# twice -- proves BOTH independently loaded/ran their own private copy
+# of the embedded ELF image (Milestone 17, ADR 0017) and made their own
+# validated syscall, not just one of them.
+hello_count=$(grep -cF "[OK] hello from ring 3 via ELF-loaded process" "$SERIAL_LOG" 2>/dev/null || true)
 if [ "$hello_count" -ne 2 ]; then
     echo "FAIL: expected exactly 2 'hello from ring 3' messages (one per process), got $hello_count" >&2
     fail=1

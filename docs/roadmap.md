@@ -680,16 +680,73 @@ reported in raw PS/2 wire convention (positive `dy` = up), left
 unconverted since there's no display consumer yet to define a screen
 convention; no scroll-wheel (`IntelliMouse`) support.
 
-## 17. FS, SMP, and whatever's learned by then (sequence TBD)
+## 17. ELF64 loader for ring-3 processes — DONE
+First of `future.md`'s "reasonable next steps" (not adjacent to any
+flagged non-goal): every ring-3 process through Milestone 16 ran the
+exact same hand-written raw code blob (`user_demo.asm`) — not a real
+loader, a single hardcoded program.
+**Proves:** the kernel can parse and correctly map a REAL, multi-segment
+ELF64 static executable into a process's own address space — distinct
+per-segment permissions derived from the file's own program headers
+(real W^X, not one fixed policy), `.bss` genuinely zero-filled, `.data`
+genuinely copied from the file — not just that a ring-3 program runs.
+**Deliverables:**
+- `libk/elf.h/.c` (new): ELF64 header/program-header structs and
+  bounds/overflow-checked validation (`elf64_validate`,
+  `elf64_get_phdr`, `elf64_validate_load_segment`) — pure parsing, no
+  kernel dependency, host-tested (`tests/host/test_elf.c`, 10 checks).
+- `kernel/mm/elf_loader.h/.c` (new): `elf_load()` — walks validated
+  `PT_LOAD` segments, allocates fresh `VMM_FLAG_OWNED` frames per
+  segment (zeroed first, then file bytes copied in — how `.bss` comes
+  out zero-filled for free), maps them with permissions derived from
+  each segment's own `p_flags`.
+- `kernel/mm/vmm.h`: `VMM_IDENTITY_WINDOW_LIMIT` moved here from
+  `vmm.c` (now a second caller needs it).
+- `kernel/user/hello.asm`, `kernel/user/user.ld` (new): a real
+  standalone ELF64 executable — text/rodata/data/bss, `.data`/`.bss`
+  self-verified at runtime — linked as a genuinely separate build
+  (`x86_64-elf-ld`, no kernel flags), replacing `user_demo.asm`
+  (retired/removed).
+- `kernel/sched/user_elf_blob.asm` (new): embeds the compiled
+  `build/kernel/user/hello.elf` into the kernel image via `incbin`.
+- `kernel/sched/task.c`: `task_create_user()` now calls `elf_load()`
+  instead of hand-mapping a shared demo code page; the process's entry
+  RIP comes from the ELF's own `e_entry`.
+**Verification:** `make run` boots and prints, after all Milestones
+1-16 markers unchanged, `[OK] hello from ring 3 via ELF-loaded process`
+then `[OK] elf .data/.bss segment verification passed` — **twice**,
+once per independently-loaded process — then the existing
+syscall/lifecycle self-tests passing with zero frame leak (proving the
+now-private, per-process segment frames are correctly reclaimed).
+`tests/qemu/test_elf_loader_selftest.sh` (new) independently checks the
+verification message appears exactly twice and its `[FAIL]` counterpart
+never appears. `test_ring3_syscall_selftest.sh` and
+`test_process_isolation_selftest.sh` needed stale marker text updated
+(the demo program's message changed), not behavior fixes. All sixteen
+earlier smoke tests and all three pre-existing host test suites
+re-verified passing. Booted 4 times back to back with identical
+output — correct on the first real attempt, no flakiness.
+**Design record:** `docs/adr/0017-elf-loader.md`.
+**Known limitation (accepted for this milestone only):** no dynamic
+linking, no sub-page-aligned `PT_LOAD` segment support (rejected
+outright rather than mis-handled), no shared/copy-on-write text pages
+(every process gets a fresh private copy of every segment — a
+deliberate regression from the old shared-demo-page design, accepted
+pending a real COW milestone), still no filesystem-loaded programs (the
+ELF image is embedded/statically linked at build time), no
+`fork`/`exec` (every process is still spawned directly by
+`kernel_main`).
 
-Milestone 17 is intentionally left as a one-line placeholder here — full
+## 18. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 18 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
-an ELF loader + `fork`/`exec`, remaining memory maturity items (VMAs,
-demand paging/COW, a general physical direct-map), and synchronization/
-IPC — plus a disk driver + real filesystem, ACPI-based shutdown, and
-SMP/networking, all explicitly flagged to the user rather than started,
-still awaiting a decision. See `future.md` for a fuller continuation
-briefing.
+`fork`/`exec`-equivalent syscalls (now that a real loader exists to
+`exec` INTO), remaining memory maturity items (VMAs, demand paging/COW,
+a general physical direct-map), and synchronization/IPC — plus a disk
+driver + real filesystem, ACPI-based shutdown, and SMP/networking, all
+explicitly flagged to the user rather than started, still awaiting a
+decision. See `future.md` for a fuller continuation briefing.

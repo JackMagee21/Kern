@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Milestone 7 smoke test: boot headless in QEMU and assert the ring-3
-# demo task actually ran in user mode, its validated sys_write syscall
-# printed its message, and its sys_nop loop kept round-tripping via
-# SYSCALL/SYSRET repeatedly -- not just that gdt_init()/tss_init()/
-# syscall_init() ran without crashing.
+# Milestone 7 smoke test (message text updated by Milestone 17's ELF
+# loader, ADR 0017): boot headless in QEMU and assert a ring-3 process
+# actually ran in user mode, its validated sys_write syscall printed its
+# message, and its sys_nop loop kept round-tripping via SYSCALL/SYSRET
+# repeatedly -- not just that gdt_init()/tss_init()/syscall_init() ran
+# without crashing.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -35,7 +36,7 @@ check() {
 
 check "[OK] tss/syscall initialized"
 check "[OK] scheduler initialized, 2 kernel + 2 ring-3 processes created"
-check "[OK] hello from ring 3 via syscall"
+check "[OK] hello from ring 3 via ELF-loaded process"
 check "[OK] syscall self-test passed, "
 check "syscalls serviced from 2 ring-3 processes"
 
@@ -44,7 +45,7 @@ check "syscalls serviced from 2 ring-3 processes"
 # scheduled, then it ran in user mode and made a real syscall), not a
 # coincidental substring match.
 create_line=$(grep -n '\[OK\] scheduler initialized, 2 kernel + 2 ring-3 processes created' "$SERIAL_LOG" | head -1 | cut -d: -f1)
-hello_line=$(grep -n '\[OK\] hello from ring 3 via syscall' "$SERIAL_LOG" | head -1 | cut -d: -f1)
+hello_line=$(grep -n '\[OK\] hello from ring 3 via ELF-loaded process' "$SERIAL_LOG" | head -1 | cut -d: -f1)
 if [ -z "$create_line" ] || [ -z "$hello_line" ] || [ "$create_line" -ge "$hello_line" ]; then
     echo "FAIL: ring-3 task's message did not appear after task creation as expected" >&2
     fail=1

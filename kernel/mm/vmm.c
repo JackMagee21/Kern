@@ -28,16 +28,9 @@
 #define PTE_PS        (1ULL << 7) /* huge page at PD/PDPT level (boot.asm's 2MiB mappings) */
 #define PTE_ADDR_MASK 0x000ffffffffff000ULL /* bits 12-51 */
 
-/* boot.asm's pd_shared covers physical 0-8MiB (ADR 0001) with 2MiB
-   identity pages; new page-table frames this file allocates must land
-   in that range to be directly writable via their own physical address
-   as a pointer (no general physical-memory direct-map exists yet -- see
-   ADR 0004 for why one wasn't built for this milestone). pmm_alloc_frame
-   hands out the lowest-numbered free frame first and this runs early
-   (heap_init, right after pmm_init), so in practice every table frame
-   this allocates lands well inside this window; get_or_create_table
-   panics instead of silently corrupting memory if that's ever violated. */
-#define VMM_IDENTITY_WINDOW_LIMIT 0x800000ULL
+/* VMM_IDENTITY_WINDOW_LIMIT is declared in vmm.h -- Milestone 17's ELF
+   loader (kernel/mm/elf_loader.c) needs the same constant, which is why
+   it moved out of this file. */
 
 #define MSR_EFER 0xC0000080u /* same MSR syscall.c already programs EFER_SCE into */
 #define EFER_NXE (1ULL << 11)

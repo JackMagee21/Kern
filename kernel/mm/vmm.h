@@ -18,6 +18,18 @@
                                            else) -- the SDM's "most restrictive wins"
                                            rule applies the same way it does to U/S and
                                            writable. */
+/* boot.asm's pd_shared covers physical 0-8MiB (ADR 0001) with 2MiB
+   identity pages; anything that needs to dereference a freshly
+   pmm_alloc_frame()'d frame directly as a pointer (page-table bootstrap
+   frames in vmm.c, and since Milestone 17 the ELF loader's segment
+   destination frames, kernel/mm/elf_loader.c) must land in that range
+   -- no general physical-memory direct-map exists yet (a known,
+   accepted limitation since ADR 0004). pmm_alloc_frame hands out the
+   lowest-numbered free frame first and both callers run early in boot,
+   so in practice this holds; each caller panics instead of silently
+   corrupting memory if it's ever violated, rather than assuming. */
+#define VMM_IDENTITY_WINDOW_LIMIT 0x800000ULL
+
 #define VMM_FLAG_OWNED    (1ULL << 9) /* bits 9-11 are AVL (available for OS use) at
                                           every page-table level per Intel SDM Vol. 3A
                                           Sec. 4.5 -- doesn't collide with any

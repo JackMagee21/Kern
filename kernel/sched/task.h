@@ -88,23 +88,23 @@ task_t *task_create(void (*entry)(void));
    its own stack -- see ADR 0010. */
 void task_free_kernel_stack(uint64_t base, uint64_t size);
 
-/* Builds one ring-3 demo process, in its OWN address space
-   (vmm_create_address_space()) -- callable more than once; each call
-   is a genuinely independent process, not a second handle onto the
-   same one. Unlike task_create(), entry isn't a C function pointer --
-   it's kernel/sched/user_demo.asm's hand-written, position-independent
-   blob (see ADR 0007 for why it can't be a normal C function:
+/* Builds one ring-3 process, in its OWN address space
+   (vmm_create_address_space()) -- callable more than once; each call is
+   a genuinely independent process, not a second handle onto the same
+   one. Since Milestone 17 (ADR 0017), the process's code/data/bss come
+   from parsing and mapping a REAL embedded ELF64 executable
+   (kernel/mm/elf_loader.c, kernel/user/hello.asm) rather than Milestone
+   7-16's single hand-written, position-independent blob (see ADR 0007
+   for why a normal compiled C function couldn't be used directly:
    mcmodel=kernel code lives inside the kernel's own supervisor-only
-   2MiB pages, and there's no way to mark just one C function's
-   containing page user-accessible without exposing everything else
-   sharing that huge page). The underlying physical code page is safe
-   to share read-only across every process's address space (same as
-   how real OSes share program text between instances of the same
-   program) -- only the stack is private per process, fresh physical
-   frames each call. Also maps a separate, NOT user-accessible
-   kernel-mode stack (for TSS.RSP0 / syscall entry -- see task_t's
-   pml4/kernel_stack_top doc comment). Panics on any allocation/mapping
-   failure. */
+   2MiB pages) mapped read-only and shared across every process. Every
+   PT_LOAD segment now gets its own private, freshly allocated frame(s)
+   per process instead -- only the stack was ever private before. Also
+   maps a separate, NOT user-accessible kernel-mode stack (for TSS.RSP0
+   / syscall entry -- see task_t's pml4/kernel_stack_top doc comment).
+   Panics on any allocation/mapping failure, or if the embedded ELF
+   image itself fails validation (would mean the build is broken, not
+   bad runtime input). */
 task_t *task_create_user(void);
 
 #endif /* KERNEL_SCHED_TASK_H */

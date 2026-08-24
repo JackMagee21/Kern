@@ -6,6 +6,7 @@
 #include "../mm/heap.h"
 #include "../mm/pmm.h"
 #include "../mm/vmm.h"
+#include "../mm/elf_loader.h"
 #include "../panic.h"
 
 static uint32_t next_task_id = 1; /* 0 is reserved for the bootstrap task (scheduler.c) */
@@ -105,25 +106,20 @@ task_t *task_create(void (*entry)(void))
 }
 
 /* Private per-process virtual layout: every process uses the SAME
-   addresses, which is safe and correct now that each process has its
-   own address space -- two processes both "at" the same address are
-   backed by independent page tables, so there's no collision to avoid
-   the way ADR 0007's shared-address-space design had to.
-   Deliberately PML4 index 1 (0x8000000000+), not index 0: PML4[0] is
-   reserved entirely for the kernel's shared identity map, which every
-   process's address space also carries now (vmm_create_address_space(),
-   ADR 0009) -- process-private mappings can't live in the same PML4
-   slot as that shared entry. 0x400000/0x600000 within that slot keeps
-   the same offsets ADR 0007 originally used (0x400000 is the standard
-   ELF load address on x86_64), just relocated to a slot that's actually
-   private. */
-#define USER_CODE_VIRT_BASE  0x0000008000400000ULL
+   stack address, which is safe and correct now that each process has
+   its own address space -- two processes both "at" the same address
+   are backed by independent page tables, so there's no collision to
+   avoid the way ADR 0007's shared-address-space design had to. The
+   code's own virtual address now comes from the loaded ELF image's own
+   program headers (kernel/user/user.ld links it at 0x8000400000, the
+   same slot ADR 0007/0009 originally hardcoded) rather than being
+   hardcoded here -- see elf_load(), ADR 0017. */
 #define USER_STACK_VIRT_BASE 0x0000008000600000ULL
 #define USER_STACK_SIZE      (16u * 1024u)
 #define USER_KERNEL_STACK_SIZE (16u * 1024u)
 
-extern char user_demo_start_lma[]; /* boot/linker.ld: physical start/end of kernel/sched/user_demo.asm's blob */
-extern char user_demo_end_lma[];
+extern const uint8_t user_elf_image_start[]; /* kernel/sched/user_elf_blob.asm: embedded build/kernel/user/hello.elf */
+extern const uint8_t user_elf_image_end[];
 
 task_t *task_create_user(void)
 {
@@ -134,23 +130,22 @@ task_t *task_create_user(void)
 
     uint64_t pml4 = vmm_create_address_space();
 
-    /* Map the demo program's code: its own dedicated, page-aligned
-       physical page(s) (boot/linker.ld pads .user_demo to full 4KiB
-       boundaries specifically so nothing else shares them), read/
-       execute, user-accessible, NOT writable. The SAME physical code
-       page is mapped into every process created this way -- safe,
-       since it's never written to (no VMM_FLAG_WRITABLE), the same way
-       real OSes share program text between instances of one program.
-       Deliberately no VMM_FLAG_OWNED either (contrast the stack mapping
-       below): this frame is part of the kernel image itself, never
-       pmm_alloc_frame()'d, so a process exiting must never
-       pmm_free_frame() it back -- ADR 0010. */
-    uint64_t code_phys = (uint64_t)(uintptr_t)user_demo_start_lma;
-    uint64_t code_size = (uint64_t)(uintptr_t)user_demo_end_lma - code_phys;
-    for (uint64_t off = 0; off < code_size; off += PMM_FRAME_SIZE) {
-        if (!vmm_map_page_in(pml4, USER_CODE_VIRT_BASE + off, code_phys + off, VMM_FLAG_USER)) {
-            panic("task_create_user: failed to map demo code");
-        }
+    /* Milestone 17 (ADR 0017): parse and map the real compiled ELF64
+       executable (kernel/user/hello.asm + user.ld) instead of Milestone
+       7-16's single hand-mapped, shared-read-only demo code page.
+       Every PT_LOAD segment gets its OWN freshly allocated frame(s) in
+       THIS process's address space (VMM_FLAG_OWNED, so exit correctly
+       frees them -- ADR 0010), with per-segment W^X permissions derived
+       from the ELF's own p_flags rather than one fixed policy for the
+       whole program. elf_load() only returns false for a malformed
+       image -- the embedded blob is built by this same repo's own
+       Makefile/user.ld, so a validation failure here would mean the
+       build itself is broken, not bad runtime input; panic rather than
+       leave a half-built process behind. */
+    uint64_t image_size = (uint64_t)(uintptr_t)user_elf_image_end - (uint64_t)(uintptr_t)user_elf_image_start;
+    uint64_t entry_point;
+    if (!elf_load(pml4, user_elf_image_start, image_size, &entry_point)) {
+        panic("task_create_user: embedded user ELF image failed validation");
     }
 
     /* User-accessible stack: fresh physical frames per process (not
@@ -200,7 +195,7 @@ task_t *task_create_user(void)
        identical to the scheduler. */
     trap_frame_t *frame = (trap_frame_t *)(kernel_stack_top - sizeof(trap_frame_t));
     *frame = (trap_frame_t){
-        .rip = USER_CODE_VIRT_BASE,
+        .rip = entry_point,
         .cs = USER_CODE_SELECTOR | 3,  /* RPL=3 */
         .rflags = 0x202,
         .rsp = user_stack_top,

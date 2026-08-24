@@ -17,7 +17,7 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 16 (2026-08-24)
+## State as of Milestone 17 (2026-08-24)
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -51,20 +51,29 @@ the design reasoning and any real bugs found along the way.
     fallback, `reboot` shell command
 16. **PS/2 mouse driver** — IRQ12, standard 3-byte packet decode, a
     `mouse` shell command (no cursor/graphics to draw yet — see below)
+17. **ELF64 loader for ring-3 processes** — `libk/elf.h/.c` (host-tested
+    parser) + `kernel/mm/elf_loader.c` (kernel-only mapper): every
+    ring-3 process now parses and maps a REAL compiled ELF64 executable
+    (`kernel/user/hello.asm` + `user.ld`, embedded via `incbin`) with
+    real per-segment W^X derived from the file's own program headers,
+    replacing Milestone 7-16's single hand-mapped raw code blob
+    (`user_demo.asm`, retired). Each process gets a fresh private copy
+    of every segment (no shared/COW text pages — a deliberate,
+    documented tradeoff, see ADR 0017).
 
-**Testing state:** 16 QEMU smoke tests (`tests/qemu/*.sh`), 3 host unit
+**Testing state:** 17 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Every milestone has its own dedicated smoke test; run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** ten milestones
-(9-16) all followed the same pattern — implement, boot in QEMU for
+**A note on process discipline that held up well:** eleven milestones
+(9-17) all followed the same pattern — implement, boot in QEMU for
 real, fix what actually breaks, write the ADR describing what was
 tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15 all landed correctly on the first real
-boot; Milestone 9 (per-process address spaces) and Milestone 16 (PS/2
-mouse) each hit one genuine bug that needed real diagnosis (not
+logical pieces. Milestones 10-15 and 17 all landed correctly on the
+first real boot; Milestone 9 (per-process address spaces) and Milestone
+16 (PS/2 mouse) each hit one genuine bug that needed real diagnosis (not
 guessing) to fix — both are documented in detail in their ADRs
 (0009, 0016) specifically so the diagnostic *method*, not just the
 fix, is preserved for next time something in this territory breaks.
@@ -93,18 +102,15 @@ These don't touch a non-goal and were the natural next items on the
 "build this into an OS" list this session worked through one at a
 time:
 
-- **An ELF loader.** Right now the one ring-3 program (`user_demo.asm`)
-  is a hand-written position-independent blob embedded at link time.
-  A real ELF64 loader (parse program headers, map segments with the
-  right permissions) is the natural next step toward running more than
-  one hardcoded program — and doesn't need a filesystem by itself if
-  the ELF image is still embedded/statically linked rather than loaded
-  from disk.
 - **Process lifecycle maturity**: `fork`/`exec`-equivalent syscalls, a
   parent/child relationship, `wait()`/exit-code reporting. Milestone
   10 built exit + teardown but explicitly deferred all of this (every
   process today is spawned directly by `kernel_main`, not by another
-  process).
+  process). Milestone 17's ELF loader (`elf_load()`,
+  `kernel/mm/elf_loader.c`) is now the natural thing an `exec`-
+  equivalent syscall would call into — the loader itself doesn't care
+  who invokes it, only `task_create_user()` currently does, always with
+  the one embedded image.
 - **Remaining memory-maturity items**: VMAs (a real per-process memory
   map instead of two hardcoded regions), demand paging / copy-on-write,
   a general physical-memory direct-map (right now only the low 8MiB
@@ -129,7 +135,7 @@ time:
 - Host tests: `gcc -std=c11 -Wall -Wextra -Werror
   -fsanitize=address,undefined -Itests/host/../.. tests/host/test_X.c
   libk/X.c -o /tmp/test_X && /tmp/test_X` for each of `fmt`,
-  `heap_alloc`, `ring_buffer`.
+  `heap_alloc`, `ring_buffer`, `elf`.
 - Read `/CLAUDE.md` before touching anything — it's the actual
   governing spec for this project (toolchain, safety rules, process
   discipline, the non-goals list above). It overrides default
