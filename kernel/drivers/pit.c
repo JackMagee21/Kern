@@ -1,6 +1,5 @@
 #include "pit.h"
 #include "../../libk/io.h"
-#include "../arch/x86_64/irq.h"
 
 /*
  * 8253/8254 PIT, channel 0, ports and base frequency verified against
@@ -18,11 +17,6 @@
 
 static volatile uint64_t tick_count;
 
-static void pit_irq_handler(void)
-{
-    tick_count++;
-}
-
 void pit_init(uint32_t frequency_hz)
 {
     uint32_t divisor = PIT_BASE_FREQUENCY_HZ / frequency_hz;
@@ -36,8 +30,11 @@ void pit_init(uint32_t frequency_hz)
     outb(PIT_COMMAND, PIT_MODE3_SQUARE_WAVE);
     outb(PIT_CHANNEL0_DATA, (uint8_t)(divisor & 0xff));
     outb(PIT_CHANNEL0_DATA, (uint8_t)((divisor >> 8) & 0xff));
+}
 
-    irq_register_handler(0, pit_irq_handler);
+void pit_tick(void)
+{
+    tick_count++;
 }
 
 uint64_t pit_get_ticks(void)
