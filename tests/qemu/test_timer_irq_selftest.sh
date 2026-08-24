@@ -33,7 +33,7 @@ check() {
     fi
 }
 
-check "[OK] pic/pit/keyboard initialized, IRQ0+IRQ1 unmasked"
+check "[OK] pic/pit/keyboard/mouse initialized, IRQ0+IRQ1+IRQ2+IRQ12 unmasked"
 check "[OK] timer self-test passed ("
 check "ticks received via IRQ0)"
 
@@ -41,7 +41,7 @@ check "ticks received via IRQ0)"
 # proves isr_handler actually resumed execution after vector 3 instead
 # of halting (the old behavior through Milestone 4).
 bp_line=$(grep -n '\[PANIC\] exception: #BP Breakpoint' "$SERIAL_LOG" | head -1 | cut -d: -f1)
-pic_line=$(grep -n '\[OK\] pic/pit/keyboard initialized' "$SERIAL_LOG" | head -1 | cut -d: -f1)
+pic_line=$(grep -n '\[OK\] pic/pit/keyboard/mouse initialized' "$SERIAL_LOG" | head -1 | cut -d: -f1)
 if [ -z "$bp_line" ] || [ -z "$pic_line" ] || [ "$bp_line" -ge "$pic_line" ]; then
     echo "FAIL: #BP self-test did not resume into pic/pit init as expected" >&2
     fail=1
