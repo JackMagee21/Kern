@@ -8,6 +8,7 @@
 #include "drivers/pit.h"
 #include "drivers/keyboard.h"
 #include "drivers/pci.h"
+#include "drivers/rtc.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "arch/x86_64/tss.h"
@@ -198,6 +199,35 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write("[OK] pci self-test passed (0x");
     console_write_hex(pci_device_count);
     console_write(" device(s) found, host bridge present)\n");
+
+    /* Milestone 14 (ADR 0014): can't check against a known expected
+       wall-clock value (there isn't one -- this runs whenever it runs),
+       so the self-test instead confirms every field decoded into a
+       SANE range. A BCD-vs-binary or register-index bug would very
+       likely produce an out-of-range value in at least one field (e.g.
+       a raw BCD 0x59 misread as binary 89), so this is a real
+       correctness check, not just "didn't crash." */
+    rtc_time_t boot_time;
+    rtc_read(&boot_time);
+    if (boot_time.second > 59 || boot_time.minute > 59 || boot_time.hour > 23
+        || boot_time.day < 1 || boot_time.day > 31
+        || boot_time.month < 1 || boot_time.month > 12
+        || boot_time.year < 2020 || boot_time.year > 2100) {
+        panic("rtc self-test failed: decoded time field out of sane range");
+    }
+    console_write("[OK] rtc self-test passed, boot time (fields in hex, same as every other\n     field in this log): year 0x");
+    console_write_hex(boot_time.year);
+    console_write(" month 0x");
+    console_write_hex(boot_time.month);
+    console_write(" day 0x");
+    console_write_hex(boot_time.day);
+    console_write(" hour 0x");
+    console_write_hex(boot_time.hour);
+    console_write(" min 0x");
+    console_write_hex(boot_time.minute);
+    console_write(" sec 0x");
+    console_write_hex(boot_time.second);
+    console_write("\n");
 
     pic_remap();
     pit_init(TIMER_FREQUENCY_HZ);
