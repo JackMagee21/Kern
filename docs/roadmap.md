@@ -353,15 +353,71 @@ from a filesystem), no `sys_exit`/process teardown, no `fork`/`exec`, no
 demand paging or copy-on-write, no per-process resource limits. Revisit
 alongside the ELF loader and process lifecycle work next.
 
-## 10. FS, SMP, and whatever's learned by then (sequence TBD)
+## 10. Process lifecycle: sys_exit and teardown — DONE
+Second step of the post-Milestone-8 "build this into an OS" inventory,
+worked one step at a time per the user's instruction — the natural
+follow-on to Milestone 9: processes could be created and isolated, but
+never stopped.
+**Proves:** a ring-3 process can call `sys_exit`, actually terminate,
+and have every resource it held (its address space, its user and
+kernel stacks, its task struct) reclaimed with zero leaks — not just
+that `sys_exit` doesn't crash the kernel.
+**Deliverables:**
+- `kernel/arch/x86_64/syscall.h/.c`: `SYS_EXIT`, dispatched to
+  `scheduler_exit_current()`.
+- `kernel/sched/task.h`: `task_t` gained `state` (`TASK_READY`/
+  `TASK_ZOMBIE`), `prev` (the ready queue is now doubly-linked, for
+  O(1) zombie removal), and `kernel_stack_base` (needed to `kfree()` a
+  reaped task's kernel stack correctly).
+- `kernel/sched/scheduler.h/.c`: `scheduler_exit_current()` (marks the
+  caller a zombie, re-enables interrupts, halts forever — reuses the
+  existing preemption path rather than inventing a new switch
+  mechanism); a dedicated reaper kernel thread (spawned internally by
+  `scheduler_init()`) that actually frees a zombie's resources, on its
+  own stack, only once it's safe to (see ADR 0010 for why
+  `timer_tick_handler` itself can't do this synchronously).
+- `kernel/mm/vmm.h/.c`: `VMM_FLAG_OWNED` (marks a leaf mapping's
+  physical frame as this process's own, vs. shared/static memory it
+  merely maps) and `vmm_destroy_address_space()`, which frees an
+  entire process-private page-table tree while leaving the shared
+  kernel-half/identity-map entries untouched.
+- `kernel/sched/task.c`: the demo program's stack mapping gets
+  `VMM_FLAG_OWNED`; its code mapping deliberately doesn't (shared, ADR
+  0009).
+- `kernel/sched/user_demo.asm`: bounded `sys_nop` loop (200,000
+  iterations) followed by `sys_exit`, instead of looping forever.
+- `kernel/kernel.c`: captures `pmm_frames_free()` before either process
+  is created, waits for both to be reaped, and panics if the frame
+  count hasn't returned to exactly that baseline.
+**Verification:** `make run` boots and prints, after all Milestones
+1-9 markers unchanged, both processes' syscall self-test messages,
+then `[OK] process 4 exited and was reaped` / `[OK] process 5 exited
+and was reaped`, then `[OK] process lifecycle self-test passed, ...
+frames free, matches pre-creation baseline`. `tests/qemu/
+test_process_lifecycle_selftest.sh` (new) verifies exactly two reap
+messages, the self-test's pass line, and that the shell still starts
+normally afterward. All nine earlier milestones' smoke tests and all
+three host tests re-verified passing. Booted 4 times back to back with
+identical output — unlike Milestone 9, this landed correctly on the
+first real boot, since the design (reaper task on its own stack, never
+freeing state you're still executing on) was worked out from ADR
+0009's lesson before writing code, not discovered by crashing.
+**Design record:** `docs/adr/0010-process-lifecycle-sys-exit.md`.
+**Known limitation (accepted for this milestone only):** no parent/
+`wait()`/exit-code-reporting mechanism (nothing has a parent-process
+concept yet — every process is spawned directly by `kernel_main`); no
+`fork`/`exec`; still no ELF loader (the one demo program is embedded at
+link time). Revisit alongside a real process-creation syscall.
 
-Milestone 10 is intentionally left as a one-line placeholder here — full
+## 11. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 11 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
-ELF loader + process lifecycle (`sys_exit`, `fork`/`exec`), a disk driver
-+ real filesystem, PCI enumeration, graphics/mouse/RTC/shutdown drivers,
-memory maturity (VMAs, demand paging/COW, NX, guard pages, a general
-physical direct-map), and synchronization/IPC — plus explicit SMP/
-networking non-goal decisions still needing the user's call.
+an ELF loader + `fork`/`exec`, a disk driver + real filesystem, PCI
+enumeration, graphics/mouse/RTC/shutdown drivers, memory maturity (VMAs,
+demand paging/COW, NX, guard pages, a general physical direct-map), and
+synchronization/IPC — plus explicit SMP/networking non-goal decisions
+still needing the user's call.
