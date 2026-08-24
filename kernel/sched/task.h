@@ -16,10 +16,20 @@
    dedicated stack -- not a stack some OTHER task's still-pending saved
    context is sitting on. For a ring-0 task this is never actually
    consulted (same-privilege interrupts don't switch stacks), so it's
-   just set to the task's own stack as a harmless default. */
+   just set to the task's own stack as a harmless default.
+
+   pml4 (per-process address spaces): the top-level page table CR3
+   should hold while this task is current. Every kernel thread shares
+   the SAME value (the kernel's own, original address space --
+   task_create() just reads whatever's currently active) since they're
+   part of the kernel itself, not isolated/untrusted; only
+   task_create_user() processes get a genuinely private one from
+   vmm_create_address_space(). The scheduler reloads CR3 from this
+   field on every switch, but only when it actually changes. */
 typedef struct task {
     uint64_t rsp;
     uint64_t kernel_stack_top;
+    uint64_t pml4;
     struct task *next;
     uint32_t id;
 } task_t;
@@ -38,16 +48,23 @@ typedef struct task {
    can't satisfy the allocation. */
 task_t *task_create(void (*entry)(void));
 
-/* Milestone 7: builds the one ring-3 demo task. Unlike task_create(),
-   entry isn't a C function pointer -- it's kernel/sched/user_demo.asm's
-   hand-written, position-independent blob (see ADR 0007 for why it
-   can't be a normal C function: mcmodel=kernel code lives inside the
-   kernel's own supervisor-only 2MiB pages, and there's no way to mark
-   just one C function's containing page user-accessible without
-   exposing everything else sharing that huge page). Maps the demo
-   code, a fresh user-accessible stack, AND a separate, NOT
-   user-accessible kernel-mode stack (for TSS.RSP0 / syscall entry) into
-   dedicated virtual regions. Panics on any allocation/mapping failure. */
+/* Builds one ring-3 demo process, in its OWN address space
+   (vmm_create_address_space()) -- callable more than once; each call
+   is a genuinely independent process, not a second handle onto the
+   same one. Unlike task_create(), entry isn't a C function pointer --
+   it's kernel/sched/user_demo.asm's hand-written, position-independent
+   blob (see ADR 0007 for why it can't be a normal C function:
+   mcmodel=kernel code lives inside the kernel's own supervisor-only
+   2MiB pages, and there's no way to mark just one C function's
+   containing page user-accessible without exposing everything else
+   sharing that huge page). The underlying physical code page is safe
+   to share read-only across every process's address space (same as
+   how real OSes share program text between instances of the same
+   program) -- only the stack is private per process, fresh physical
+   frames each call. Also maps a separate, NOT user-accessible
+   kernel-mode stack (for TSS.RSP0 / syscall entry -- see task_t's
+   pml4/kernel_stack_top doc comment). Panics on any allocation/mapping
+   failure. */
 task_t *task_create_user(void);
 
 #endif /* KERNEL_SCHED_TASK_H */

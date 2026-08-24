@@ -38,22 +38,27 @@ task_t *task_create(void (*entry)(void))
 
     task->rsp = (uint64_t)frame;
     task->kernel_stack_top = stack_top; /* never actually consulted for a ring-0 task; harmless default */
+    task->pml4 = vmm_current_pml4(); /* the kernel's own address space, shared by every kernel thread */
     task->next = NULL;
     task->id = next_task_id++;
     return task;
 }
 
-/* Milestone 7: dedicated PDPT slot (509) for the ring-3 demo task's
-   code/stack, distinct from the kernel image (slot 510, boot.asm) and
-   the heap (slot 511, kernel/mm/heap.c) -- though all three still share
-   the same PML4[511] entry (mcmodel=kernel's whole -2GB region is one
-   PML4 slot), which is exactly why vmm_map_page() has to be able to
-   upgrade a pre-existing intermediate entry's U bit, not just set it on
-   newly-created ones (see vmm.h's doc comment). Distinct PDPT slots
-   still matter at the PD/PT level: they keep this region's own leaf
-   pages from ever sharing a table with the kernel's or heap's. */
-#define USER_DEMO_VIRT_BASE  0xFFFFFFFF40000000ULL
-#define USER_STACK_VIRT_BASE 0xFFFFFFFF40100000ULL /* well past the tiny code region */
+/* Private per-process virtual layout: every process uses the SAME
+   addresses, which is safe and correct now that each process has its
+   own address space -- two processes both "at" the same address are
+   backed by independent page tables, so there's no collision to avoid
+   the way ADR 0007's shared-address-space design had to.
+   Deliberately PML4 index 1 (0x8000000000+), not index 0: PML4[0] is
+   reserved entirely for the kernel's shared identity map, which every
+   process's address space also carries now (vmm_create_address_space(),
+   ADR 0009) -- process-private mappings can't live in the same PML4
+   slot as that shared entry. 0x400000/0x600000 within that slot keeps
+   the same offsets ADR 0007 originally used (0x400000 is the standard
+   ELF load address on x86_64), just relocated to a slot that's actually
+   private. */
+#define USER_CODE_VIRT_BASE  0x0000008000400000ULL
+#define USER_STACK_VIRT_BASE 0x0000008000600000ULL
 #define USER_STACK_SIZE      (16u * 1024u)
 #define USER_KERNEL_STACK_SIZE (16u * 1024u)
 
@@ -67,36 +72,45 @@ task_t *task_create_user(void)
         panic("task_create_user: kmalloc failed for task_t");
     }
 
+    uint64_t pml4 = vmm_create_address_space();
+
     /* Map the demo program's code: its own dedicated, page-aligned
        physical page(s) (boot/linker.ld pads .user_demo to full 4KiB
        boundaries specifically so nothing else shares them), read/
-       execute, user-accessible, NOT writable. */
+       execute, user-accessible, NOT writable. The SAME physical code
+       page is mapped into every process created this way -- safe,
+       since it's never written to (no VMM_FLAG_WRITABLE), the same way
+       real OSes share program text between instances of one program. */
     uint64_t code_phys = (uint64_t)(uintptr_t)user_demo_start_lma;
     uint64_t code_size = (uint64_t)(uintptr_t)user_demo_end_lma - code_phys;
     for (uint64_t off = 0; off < code_size; off += PMM_FRAME_SIZE) {
-        if (!vmm_map_page(USER_DEMO_VIRT_BASE + off, code_phys + off, VMM_FLAG_USER)) {
+        if (!vmm_map_page_in(pml4, USER_CODE_VIRT_BASE + off, code_phys + off, VMM_FLAG_USER)) {
             panic("task_create_user: failed to map demo code");
         }
     }
 
-    /* User-accessible stack: fresh physical frames (not kmalloc -- the
-       kernel heap is supervisor-only mapped; a user stack needs its own
-       frames mapped with VMM_FLAG_USER from the start). */
+    /* User-accessible stack: fresh physical frames per process (not
+       kmalloc -- the kernel heap is supervisor-only mapped; a user
+       stack needs its own frames mapped with VMM_FLAG_USER from the
+       start). Unlike the code, this must NOT be shared -- each
+       process's stack is private. */
     for (uint64_t off = 0; off < USER_STACK_SIZE; off += PMM_FRAME_SIZE) {
         uint64_t frame = pmm_alloc_frame();
         if (frame == 0) {
             panic("task_create_user: pmm exhausted mapping the user stack");
         }
-        if (!vmm_map_page(USER_STACK_VIRT_BASE + off, frame, VMM_FLAG_USER | VMM_FLAG_WRITABLE)) {
+        if (!vmm_map_page_in(pml4, USER_STACK_VIRT_BASE + off, frame, VMM_FLAG_USER | VMM_FLAG_WRITABLE)) {
             panic("task_create_user: failed to map user stack");
         }
     }
     uint64_t user_stack_top = USER_STACK_VIRT_BASE + USER_STACK_SIZE;
 
     /* Separate kernel-mode stack: ordinary (supervisor-only) kmalloc'd
-       memory, used for TSS.RSP0 / syscall entry while this task is
-       current. Must NOT be user-accessible -- it holds kernel data
-       during interrupt/syscall handling. */
+       memory (in the KERNEL's own address space, shared/reachable from
+       every process's table via the copied PML4[511] entry), used for
+       TSS.RSP0 / syscall entry while this task is current. Must NOT be
+       user-accessible -- it holds kernel data during interrupt/syscall
+       handling. */
     uint8_t *kernel_stack = (uint8_t *)kmalloc(USER_KERNEL_STACK_SIZE);
     if (kernel_stack == NULL) {
         panic("task_create_user: kmalloc failed for the kernel-mode stack");
@@ -110,7 +124,7 @@ task_t *task_create_user(void)
        identical to the scheduler. */
     trap_frame_t *frame = (trap_frame_t *)(kernel_stack_top - sizeof(trap_frame_t));
     *frame = (trap_frame_t){
-        .rip = USER_DEMO_VIRT_BASE,
+        .rip = USER_CODE_VIRT_BASE,
         .cs = USER_CODE_SELECTOR | 3,  /* RPL=3 */
         .rflags = 0x202,
         .rsp = user_stack_top,
@@ -119,6 +133,7 @@ task_t *task_create_user(void)
 
     task->rsp = (uint64_t)frame;
     task->kernel_stack_top = kernel_stack_top;
+    task->pml4 = pml4;
     task->next = NULL;
     task->id = next_task_id++;
     return task;
