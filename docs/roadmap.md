@@ -511,15 +511,59 @@ exception-recovery/signal-delivery mechanism exists yet, so a real
 stack overflow still halts the kernel rather than terminating only the
 offending task.
 
-## 13. FS, SMP, and whatever's learned by then (sequence TBD)
+## 13. PCI bus enumeration — DONE
+Fifth step of the post-Milestone-8 "build this into an OS" inventory —
+"PCI enumeration," named in the original hardware/drivers list.
+Groundwork for any future driver beyond the fixed-port legacy devices
+already supported (PIC/PIT/PS-2/VGA/serial): there's no way to find a
+real device's I/O ports/BARs/IRQ without first knowing where it lives
+on the bus.
+**Proves:** the kernel can discover real hardware present on the PCI
+bus via the legacy Configuration Mechanism #1 (`0xCF8`/`0xCFC`) — not
+just that a scan function runs without crashing, but that it finds and
+correctly decodes actual devices QEMU exposes.
+**Deliverables:**
+- `libk/io.h`: `outl`/`inl` (32-bit port I/O), needed for the first
+  time by this driver.
+- `kernel/drivers/pci.h/.c` (new): `pci_scan()` — brute-force scans
+  all 256 buses x 32 devices x 8 functions via `CONFIG_ADDRESS`/
+  `CONFIG_DATA`, reporting each present function's vendor/device ID and
+  class/subclass/prog-if/header-type through a callback. Pure
+  enumeration only — doesn't drive any device found.
+- `kernel/kernel.c`: calls `pci_scan()`, logs every device found, and
+  self-tests that QEMU's Intel host bridge (bus 0/device 0/function 0,
+  vendor `0x8086`) specifically was found — the one device guaranteed
+  present regardless of which other peripherals a given QEMU version/
+  invocation exposes.
+**Verification:** `make run` boots and prints six real `[PCI] ...`
+lines (host bridge, ISA bridge, IDE controller, PM bridge, VGA, NIC —
+QEMU's actual i440fx devices) then `[OK] pci self-test passed (0x6
+device(s) found, host bridge present)`, with every Milestone 1-12
+marker through the shell prompt unchanged afterward. `tests/qemu/
+test_pci_selftest.sh` (new) verifies the exact host-bridge line and the
+device count. All twelve earlier smoke tests and all three host tests
+re-verified passing. Booted 4 times back to back with an identical
+device list each time — correct on the first real attempt, no
+flakiness, same as Milestones 10-12.
+**Design record:** `docs/adr/0013-pci-enumeration.md`.
+**Known limitation (accepted for this milestone only):** brute-force
+scan of all 256 buses (no bridge-topology-aware recursive walk — fast
+enough in practice for what's being scanned, deferred until it isn't);
+no MMIO-based Enhanced Configuration Access Mechanism (would need ACPI
+MCFG parsing, a listed non-goal pending confirmation); nothing found by
+the scan is actually driven yet — enumeration only. Revisit alongside
+whichever specific device (disk, NIC) a future storage/network step
+actually needs.
 
-Milestone 13 is intentionally left as a one-line placeholder here — full
+## 14. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 14 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
-an ELF loader + `fork`/`exec`, a disk driver + real filesystem, PCI
-enumeration, graphics/mouse/RTC/shutdown drivers, remaining memory
-maturity items (VMAs, demand paging/COW, a general physical direct-map),
-and synchronization/IPC — plus explicit SMP/networking non-goal
-decisions still needing the user's call.
+an ELF loader + `fork`/`exec`, a disk driver + real filesystem, graphics/
+mouse/RTC/shutdown drivers, remaining memory maturity items (VMAs,
+demand paging/COW, a general physical direct-map), and synchronization/
+IPC — plus explicit SMP/networking/ACPI non-goal decisions still needing
+the user's call.
