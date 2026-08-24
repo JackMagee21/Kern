@@ -23,6 +23,17 @@ static void expect_hex(uint64_t value, const char *expected)
     }
 }
 
+static void expect_dec(uint32_t value, const char *expected)
+{
+    char out[11];
+    u32_to_dec(value, out);
+    if (strcmp(out, expected) != 0) {
+        fprintf(stderr, "u32_to_dec(%u) = \"%s\", expected \"%s\"\n",
+                (unsigned)value, out, expected);
+        checks_failed++;
+    }
+}
+
 int main(void)
 {
     expect_hex(0x0, "0000000000000000");
@@ -30,6 +41,13 @@ int main(void)
     expect_hex(0xdeadbeef, "00000000deadbeef");
     expect_hex(0xffffffffffffffffULL, "ffffffffffffffff");
     expect_hex(0x0123456789abcdefULL, "0123456789abcdef");
+
+    expect_dec(0, "0");
+    expect_dec(1, "1");
+    expect_dec(9, "9");
+    expect_dec(10, "10");
+    expect_dec(2026, "2026");
+    expect_dec(4294967295u, "4294967295");
 
     if (checks_failed != 0) {
         fprintf(stderr, "%d check(s) failed\n", checks_failed);
