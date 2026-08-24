@@ -38,8 +38,11 @@ task_t *task_create(void (*entry)(void))
 
     task->rsp = (uint64_t)frame;
     task->kernel_stack_top = stack_top; /* never actually consulted for a ring-0 task; harmless default */
+    task->kernel_stack_base = (uint64_t)(uintptr_t)stack;
     task->pml4 = vmm_current_pml4(); /* the kernel's own address space, shared by every kernel thread */
+    task->state = TASK_READY;
     task->next = NULL;
+    task->prev = NULL;
     task->id = next_task_id++;
     return task;
 }
@@ -80,7 +83,11 @@ task_t *task_create_user(void)
        execute, user-accessible, NOT writable. The SAME physical code
        page is mapped into every process created this way -- safe,
        since it's never written to (no VMM_FLAG_WRITABLE), the same way
-       real OSes share program text between instances of one program. */
+       real OSes share program text between instances of one program.
+       Deliberately no VMM_FLAG_OWNED either (contrast the stack mapping
+       below): this frame is part of the kernel image itself, never
+       pmm_alloc_frame()'d, so a process exiting must never
+       pmm_free_frame() it back -- ADR 0010. */
     uint64_t code_phys = (uint64_t)(uintptr_t)user_demo_start_lma;
     uint64_t code_size = (uint64_t)(uintptr_t)user_demo_end_lma - code_phys;
     for (uint64_t off = 0; off < code_size; off += PMM_FRAME_SIZE) {
@@ -93,13 +100,16 @@ task_t *task_create_user(void)
        kmalloc -- the kernel heap is supervisor-only mapped; a user
        stack needs its own frames mapped with VMM_FLAG_USER from the
        start). Unlike the code, this must NOT be shared -- each
-       process's stack is private. */
+       process's stack is private. VMM_FLAG_OWNED marks these frames as
+       this process's own, so vmm_destroy_address_space() (ADR 0010)
+       actually frees them back to the pmm on exit -- unlike the code
+       page above, which deliberately omits it. */
     for (uint64_t off = 0; off < USER_STACK_SIZE; off += PMM_FRAME_SIZE) {
         uint64_t frame = pmm_alloc_frame();
         if (frame == 0) {
             panic("task_create_user: pmm exhausted mapping the user stack");
         }
-        if (!vmm_map_page_in(pml4, USER_STACK_VIRT_BASE + off, frame, VMM_FLAG_USER | VMM_FLAG_WRITABLE)) {
+        if (!vmm_map_page_in(pml4, USER_STACK_VIRT_BASE + off, frame, VMM_FLAG_USER | VMM_FLAG_WRITABLE | VMM_FLAG_OWNED)) {
             panic("task_create_user: failed to map user stack");
         }
     }
@@ -133,8 +143,11 @@ task_t *task_create_user(void)
 
     task->rsp = (uint64_t)frame;
     task->kernel_stack_top = kernel_stack_top;
+    task->kernel_stack_base = (uint64_t)(uintptr_t)kernel_stack;
     task->pml4 = pml4;
+    task->state = TASK_READY;
     task->next = NULL;
+    task->prev = NULL;
     task->id = next_task_id++;
     return task;
 }

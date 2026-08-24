@@ -25,12 +25,36 @@
    part of the kernel itself, not isolated/untrusted; only
    task_create_user() processes get a genuinely private one from
    vmm_create_address_space(). The scheduler reloads CR3 from this
-   field on every switch, but only when it actually changes. */
+   field on every switch, but only when it actually changes.
+
+   kernel_stack_base (process lifecycle, ADR 0010): the pointer
+   kmalloc() actually returned for this task's kernel-mode stack --
+   kernel_stack_top alone isn't enough to kfree() it correctly, since
+   it points at the far END of the allocation, not its start.
+
+   state/next/prev (process lifecycle, ADR 0010): a task is either
+   TASK_READY, live in the scheduler's doubly-linked circular ready
+   queue (next/prev both meaningful), or TASK_ZOMBIE, unlinked from
+   that queue and instead singly-linked into the reaper's pending list
+   (next reused as that chain's link -- prev is no longer meaningful
+   once a task leaves the ready queue, so there's no need for a second
+   field just for the zombie chain too). See kernel/sched/scheduler.c
+   for why actually freeing a zombie's resources (kernel_stack_base,
+   pml4, the task_t itself) has to be deferred to a separate reaper
+   task rather than happening as soon as a task exits. */
+typedef enum {
+    TASK_READY,
+    TASK_ZOMBIE,
+} task_state_t;
+
 typedef struct task {
     uint64_t rsp;
     uint64_t kernel_stack_top;
+    uint64_t kernel_stack_base;
     uint64_t pml4;
+    task_state_t state;
     struct task *next;
+    struct task *prev;
     uint32_t id;
 } task_t;
 
