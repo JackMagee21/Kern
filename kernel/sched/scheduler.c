@@ -131,7 +131,7 @@ static void reaper_task(void)
         }
 
         vmm_destroy_address_space(dead->pml4);
-        kfree((void *)(uintptr_t)dead->kernel_stack_base);
+        task_free_kernel_stack(dead->kernel_stack_base, dead->kernel_stack_top - dead->kernel_stack_base);
         console_write("[OK] process ");
         console_write_hex(dead->id);
         console_write(" exited and was reaped\n");
