@@ -80,6 +80,7 @@ def type_line(text):
 
 type_line("help")
 type_line("echo shelltest123")
+type_line("date")
 time.sleep(0.5)
 send("quit", 0.3)
 s.close()
@@ -99,9 +100,11 @@ check() {
 
 check "kernel shell -- type 'help' for commands"
 check "> help"
-check "commands: help, echo <text>, uptime, clear"
+check "commands: help, echo <text>, uptime, date, clear"
 check "> echo shelltest123"
 check "shelltest123"
+check "> date"
+check "UTC (from CMOS RTC)"
 
 if [ "$fail" -ne 0 ]; then
     echo "--- captured serial output ---" >&2
