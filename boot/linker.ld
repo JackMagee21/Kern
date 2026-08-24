@@ -10,6 +10,14 @@
  * .data/.bss, compiled with -mcmodel=kernel) links at the top-2GB virtual
  * base that mcmodel=kernel assumes, while its LMA (AT>) keeps it
  * contiguous in physical memory right after the boot trampoline.
+ *
+ * __bss_start/__bss_end (Milestone 3): GRUB only loads the file's real
+ * (PROGBITS) content -- nothing guarantees the physical RAM backing
+ * .bss is actually zero, since it's NOLOAD. boot.asm zeroes exactly
+ * this range before calling kernel_main, so kernel/mm/pmm.c's static
+ * bitmap (and any other kernel static) can rely on C's normal
+ * zero-initialization guarantee instead of every subsystem having to
+ * self-initialize defensively.
  */
 
 ENTRY(_start)
@@ -57,8 +65,10 @@ SECTIONS
 
     .bss ALIGN(4K) (NOLOAD) : AT(ADDR(.bss) - KERNEL_VMA_OFFSET)
     {
+        __bss_start = .;
         *(COMMON)
         *(.bss*)
+        __bss_end = .;
     }
 
     kernel_end_lma = . - KERNEL_VMA_OFFSET;

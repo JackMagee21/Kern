@@ -290,7 +290,19 @@ long_mode_entry:
 section .text
 bits 64
 
+extern __bss_start
+extern __bss_end
+
 higher_half_entry:
+    ; Zero .bss before any C code runs: GRUB only loads the file's real
+    ; content, so nothing else guarantees this physical RAM starts zero
+    ; (see boot/linker.ld's __bss_start/__bss_end comment).
+    mov rdi, __bss_start
+    mov rcx, __bss_end
+    sub rcx, rdi
+    xor eax, eax
+    rep stosb
+
     mov edi, [multiboot_magic]
     mov esi, [multiboot_info_ptr]
     and rsp, ~0xf                ; SysV ABI: RSP must be 16-byte aligned at `call`
