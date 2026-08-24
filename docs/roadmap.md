@@ -121,12 +121,56 @@ demand yet. Revisit either only when something actually needs more
 (a bigger heap, or mapping arbitrary physical memory like a device's
 MMIO region).
 
-## 5. PIT/APIC timer + IRQ handling
+## 5. PIT/APIC timer + IRQ handling — DONE
+**Proves:** the kernel can be interrupted asynchronously by hardware on
+its own schedule, not just run synchronously on demand — the foundation
+Milestone 6's preemptive scheduler needs.
+**Deliverables:**
+- `kernel/drivers/pic.c/.h`: 8259 PIC remap (IRQ0-15 → vectors 32-47,
+  ports/ICW values verified against Linux's own i8259 source), EOI,
+  per-line mask/unmask. Legacy PIC+PIT chosen over APIC — confirmed with
+  the user (roadmap said "PIT/APIC," ambiguous by design) — since APIC
+  needs either ACPI MADT parsing (CLAUDE.md non-goal territory) or a
+  hardcoded IOAPIC address, for benefits (per-CPU timers/IRQ routing)
+  that don't matter without SMP (also a non-goal here). See ADR 0005.
+- `kernel/drivers/pit.c/.h`: PIT channel 0, mode 3, programmable
+  frequency (divisor verified against Linux's `PIT_TICK_RATE`); owns its
+  own IRQ0 handler and a lock-free `volatile` tick counter (justified:
+  single writer, single simple-load reader, atomic on x86_64).
+- `kernel/arch/x86_64/irq.asm`, `common_stub.inc`: one stub per IRQ
+  vector, sharing `isr.asm`'s exact save/align/restore sequence via a
+  new shared NASM macro rather than duplicating it or hardcoding a
+  struct-offset dispatch trick.
+- `kernel/arch/x86_64/irq_dispatch.c/.h`: per-line handler registration
+  and dispatch, called from `irq_common_stub`.
+- `kernel/arch/x86_64/idt.c`: extended to also install IRQ gates
+  (32-47) alongside the existing exception gates (0-31).
+- `kernel/arch/x86_64/exceptions.c`: `isr_handler` now resumes normally
+  for `#BP` specifically (traps are resumable by design) instead of
+  halting like every other exception — lets the Milestone 2 self-test
+  coexist with this milestone's requirement that the kernel keep
+  running after boot.
+- `kernel/kernel.c`: remaps the PIC, starts the PIT at 100Hz, unmasks
+  IRQ0, enables interrupts, waits for 100 real ticks, then idles
+  forever — the first milestone that doesn't end in a deliberate panic.
+**Verification:** `make run` boots and prints the `#BP` fault dump
+*followed by* (not ending in) `[OK] pic/pit initialized, timer IRQ0
+unmasked` then `[OK] timer self-test passed (0x64 ticks received via
+IRQ0)`. `tests/qemu/test_timer_irq_selftest.sh` (new) checks both
+markers and that the `#BP` dump precedes the pic/pit line in the actual
+output (proving resume-on-#BP works, not just present markers).
+Milestones 1-4's smoke tests all re-verified passing.
+**Design record:** `docs/adr/0005-pic-pit-irq-handling.md`.
+**Known limitation (accepted for this milestone only):** only IRQ0 has
+a registered handler — no keyboard (IRQ1) or other device driver yet;
+`irq_register_handler` supports exactly one handler per line, no
+chaining (nothing needs to share a line yet).
+
 ## 6. Preemptive scheduler + context switch (single CPU)
 ## 7. Userspace: ring 3, syscalls, process model
 ## 8. Later: FS, drivers, SMP (sequence TBD from what's learned above)
 
-Milestones 5–8 are intentionally left as one-line placeholders here — full
+Milestones 6–8 are intentionally left as one-line placeholders here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn.
