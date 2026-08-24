@@ -22,9 +22,11 @@ ISO_DIR := $(BUILD_DIR)/iso
 C_SOURCES := kernel/kernel.c kernel/panic.c kernel/drivers/serial.c kernel/drivers/pic.c kernel/drivers/pit.c \
              libk/fmt.c libk/heap_alloc.c \
              kernel/arch/x86_64/gdt.c kernel/arch/x86_64/idt.c kernel/arch/x86_64/exceptions.c kernel/arch/x86_64/irq_dispatch.c \
+             kernel/arch/x86_64/tss.c kernel/arch/x86_64/syscall.c \
              kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/heap.c \
              kernel/sched/task.c kernel/sched/scheduler.c
-ASM_SOURCES := kernel/arch/x86_64/boot.asm kernel/arch/x86_64/gdt_flush.asm kernel/arch/x86_64/isr.asm kernel/arch/x86_64/irq.asm
+ASM_SOURCES := kernel/arch/x86_64/boot.asm kernel/arch/x86_64/gdt_flush.asm kernel/arch/x86_64/isr.asm kernel/arch/x86_64/irq.asm \
+               kernel/arch/x86_64/syscall_entry.asm kernel/sched/user_demo.asm
 
 C_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
 ASM_OBJECTS := $(patsubst %.asm,$(BUILD_DIR)/%.o,$(ASM_SOURCES))
