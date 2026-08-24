@@ -84,13 +84,49 @@ the `.bss` fix. See ADR 0003 for the full trail.
 yet to size one dynamically) — revisit only if a real target's RAM ever
 approaches that limit.
 
-## 4. Paging/VMM + kernel heap
+## 4. Paging/VMM + kernel heap — DONE
+**Proves:** the kernel can turn a physical frame into usable memory at an
+arbitrary virtual address, and allocate/free heap memory dynamically —
+removes the "no malloc/free" constraint every prior milestone worked
+around with static arrays.
+**Deliverables:**
+- `kernel/mm/vmm.c/.h`: 4-level page-table walker/mapper
+  (`vmm_map_page`/`vmm_unmap_page`), extending boot.asm's live PML4
+  (reused via `CR3`, never reloaded) with a new dedicated 1GiB region
+  for the heap rather than touching the kernel image's own boot-time
+  2MiB mapping. `invlpg` after every map/unmap.
+- `libk/heap_alloc.c/.h`: first-fit free-list allocator with splitting/
+  coalescing, pure hardware-free logic, host-tested
+  (`tests/host/test_heap_alloc.c`, ASan/UBSan, 5 checks).
+- `kernel/mm/heap.c/.h`: `kmalloc`/`kfree`, backed by a 1MiB region
+  `heap_init()` eagerly maps via the VMM.
+- `kernel/panic.c/.h`: shared `panic()`, factored out of `kernel_main`
+  now that `vmm.c`/`heap.c` need it too (three real call sites, not
+  speculative infrastructure).
+- `kernel/kernel.c`: calls `heap_init()`, then an alloc→write→verify→
+  free→reuse self-test.
+**Verification:** `tests/host/test_heap_alloc.c` passes (5 checks,
+ASan/UBSan). `make run` boots and prints `[OK] kernel heap initialized`
+→ `[OK] heap self-test passed (alloc/write/verify/free/reuse)`.
+`tests/qemu/test_heap_selftest.sh` (new) plus all three earlier
+milestones' smoke tests re-verified passing. See ADR 0004 for the full
+trail, including the identity-window invariant `vmm.c` checks at
+runtime rather than assumes.
+**Design record:** `docs/adr/0004-vmm-and-kernel-heap.md`.
+**Known limitation (accepted for this milestone only):** no general
+physical-memory direct-map — only the low 8MiB boot.asm identity-maps
+is directly writable for new page-table bootstrap frames (checked at
+runtime, panics if violated); heap is a fixed 1MiB with no growth-on-
+demand yet. Revisit either only when something actually needs more
+(a bigger heap, or mapping arbitrary physical memory like a device's
+MMIO region).
+
 ## 5. PIT/APIC timer + IRQ handling
 ## 6. Preemptive scheduler + context switch (single CPU)
 ## 7. Userspace: ring 3, syscalls, process model
 ## 8. Later: FS, drivers, SMP (sequence TBD from what's learned above)
 
-Milestones 4–8 are intentionally left as one-line placeholders here — full
+Milestones 5–8 are intentionally left as one-line placeholders here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn.
