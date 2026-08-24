@@ -1,11 +1,16 @@
 #include <stdint.h>
 
 #include "drivers/serial.h"
+#include "drivers/pic.h"
+#include "drivers/pit.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "mm/pmm.h"
 #include "mm/heap.h"
 #include "panic.h"
+
+#define TIMER_FREQUENCY_HZ 100u
+#define TIMER_SELFTEST_TARGET_TICKS 100u /* ~1 real second at 100Hz */
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289u
 
@@ -83,15 +88,33 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     }
     serial_write("[OK] heap self-test passed (alloc/write/verify/free/reuse)\n");
 
-    /* Milestone 2 self-test: every exception handler is a terminal fault
-       dump for now (no recovery/scheduler exists to resume into), so the
-       only way to prove the IDT path works end to end is to deliberately
-       take a fault and check its dump. #BP is used because it's benign
-       and carries no error code. This line -- and the kernel's ability to
-       do anything useful after it -- goes away once Milestone 5/6 give
-       handlers somewhere to return to. */
+    /* Milestone 2 self-test: deliberately take a #BP fault and check its
+       dump reports the right vector -- exceptions.c's isr_handler
+       resumes normally after vector 3 specifically (see its comment),
+       so boot continues right after this. */
     __asm__ volatile("int3");
 
+    pic_remap();
+    pit_init(TIMER_FREQUENCY_HZ);
+    pic_clear_mask(0); /* unmask IRQ0 (timer) only -- nothing else has a handler yet */
+    __asm__ volatile("sti");
+    serial_write("[OK] pic/pit initialized, timer IRQ0 unmasked\n");
+
+    /* Milestone 5 self-test: wait for real IRQ0 ticks to accumulate
+       instead of just checking pit_init() didn't crash -- proves the
+       PIC remap, the IDT's IRQ gates, and the timer are all actually
+       wired together and firing, not just individually plausible. */
+    while (pit_get_ticks() < TIMER_SELFTEST_TARGET_TICKS) {
+        __asm__ volatile("hlt");
+    }
+    serial_write("[OK] timer self-test passed (");
+    serial_write_hex(pit_get_ticks());
+    serial_write(" ticks received via IRQ0)\n");
+
+    /* Steady state: idle, servicing timer interrupts forever. Unlike
+       every earlier milestone, there's no reason to end in a deliberate
+       panic anymore -- the kernel now has a legitimate, ongoing reason
+       to keep running. */
     for (;;) {
         __asm__ volatile("hlt");
     }
