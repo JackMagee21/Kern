@@ -555,15 +555,58 @@ the scan is actually driven yet — enumeration only. Revisit alongside
 whichever specific device (disk, NIC) a future storage/network step
 actually needs.
 
-## 14. FS, SMP, and whatever's learned by then (sequence TBD)
+## 14. CMOS RTC driver and a `date` command — DONE
+Sixth step of the post-Milestone-8 "build this into an OS" inventory —
+"RTC," named in the original hardware/drivers list, and one of the few
+remaining items not adjacent to a flagged non-goal (storage/filesystem
+and ACPI-based shutdown were flagged to the user rather than started
+after Milestone 13 found a real IDE controller).
+**Proves:** the kernel can read and correctly decode real wall-clock
+time from the CMOS RTC (handling whatever BCD/binary and 12/24-hour
+mode the hardware is actually configured in), both at boot and
+on-demand from the shell.
+**Deliverables:**
+- `libk/fmt.h/.c`: `u32_to_dec()` — the kernel's first decimal
+  formatter (previously hex-only), host-tested alongside the existing
+  one.
+- `kernel/drivers/rtc.h/.c` (new): `rtc_read()` — double-read-until-
+  stable against the RTC's own update cycle (Status A's UIP bit),
+  BCD->binary and 12->24-hour conversion handled internally so every
+  caller always gets plain 24-hour binary fields regardless of hardware
+  configuration.
+- `kernel/kernel.c`: reads and range-validates the time at boot (no
+  known-expected value exists to compare against, so the self-test
+  checks every field is in a sane range instead).
+- `kernel/shell.c`: new `date` command, printing `YYYY-MM-DD HH:MM:SS
+  UTC (from CMOS RTC)`.
+**Verification:** `make run` boots and prints `[OK] rtc self-test
+passed, boot time ... year 0x7ea month 0x8 day 0x18 hour 0xd min 0x11
+sec 0x1c` — decoding to the real date the boot ran on. The shell's
+`date` command was exercised with real injected keystrokes (QEMU
+monitor `sendkey`, extending `tests/qemu/test_shell_selftest.sh`,
+which also needed its stale `help`-text assertion fixed).
+`tests/qemu/test_rtc_selftest.sh` (new) independently range-checks the
+boot-time year from real captured output. `tests/host/test_fmt.c`
+gained six new checks for `u32_to_dec()`. All thirteen earlier smoke
+tests and all three host tests re-verified passing. Booted 4 times back
+to back with correctly-advancing output each run — correct on the
+first real attempt, no flakiness, same as Milestones 10-13.
+**Design record:** `docs/adr/0014-rtc-driver.md`.
+**Known limitation (accepted for this milestone only):** no IRQ8-driven
+update-ended interrupt (busy-wait/double-read instead — fine for an
+occasionally-read clock, would need revisiting for a settable/
+continuously-ticking system clock); no CMOS century register read
+(21st century assumed); date is read-only, nothing can set it.
 
-Milestone 14 is intentionally left as a one-line placeholder here — full
+## 15. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 15 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
-an ELF loader + `fork`/`exec`, a disk driver + real filesystem, graphics/
-mouse/RTC/shutdown drivers, remaining memory maturity items (VMAs,
-demand paging/COW, a general physical direct-map), and synchronization/
-IPC — plus explicit SMP/networking/ACPI non-goal decisions still needing
-the user's call.
+an ELF loader + `fork`/`exec`, a mouse driver, remaining memory maturity
+items (VMAs, demand paging/COW, a general physical direct-map), and
+synchronization/IPC — plus a disk driver + real filesystem, ACPI-based
+shutdown, and SMP/networking, all explicitly flagged to the user rather
+than started, still awaiting a decision.
