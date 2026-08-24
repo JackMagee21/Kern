@@ -598,9 +598,43 @@ occasionally-read clock, would need revisiting for a settable/
 continuously-ticking system clock); no CMOS century register read
 (21st century assumed); date is read-only, nothing can set it.
 
-## 15. FS, SMP, and whatever's learned by then (sequence TBD)
+## 15. Legacy (non-ACPI) reboot — DONE
+Seventh step of the post-Milestone-8 "build this into an OS" inventory
+— "shutdown/reboot," named in the original hardware/drivers list. Full
+ACPI shutdown needs ACPI table parsing (flagged, awaiting the user's
+call); a system RESET doesn't need ACPI at all, so this covers the
+"reboot" half now.
+**Proves:** the shell's `reboot` command triggers a genuine CPU reset
+via the legacy 8042 keyboard-controller mechanism, not just that a
+function was called without crashing.
+**Deliverables:**
+- `kernel/arch/x86_64/reboot.h/.c` (new): `reboot()` — pulses the 8042
+  controller's reset line (port `0x64`, command `0xFE`); falls back to
+  an intentional triple fault (deliberately invalid IDTR + `int3`) if
+  the controller doesn't respond.
+- `kernel/shell.c`: new `reboot` command.
+**Verification:** booted without `-no-reboot`, typed `reboot` via real
+injected keystrokes, and the entire Milestone 1-14 boot sequence
+printed a second time — direct proof of a genuine reset. Found and
+fixed a real QEMU flag interaction while building the smoke test:
+`-no-shutdown` (used by every other test in this suite) overrides
+`-no-reboot`'s "exit instead of rebooting" behavior, causing QEMU to
+hang rather than exit after a real reset — diagnosed by testing flag
+combinations individually, not guessed. `tests/qemu/
+test_reboot_selftest.sh` (new) deliberately omits `-no-shutdown` and
+asserts QEMU exits promptly after the reboot command, unlike a hung
+kernel which would run to the full timeout. `test_shell_selftest.sh`
+needed its `help`-text assertion updated (stale-marker fix, not a
+regression). All fourteen earlier smoke tests and all three host tests
+re-verified passing. Correct on the first real attempt.
+**Design record:** `docs/adr/0015-legacy-reboot.md`.
+**Known limitation (accepted for this milestone only):** no power-off
+(reset only) — ACPI-based shutdown remains flagged, awaiting the
+user's decision on the ACPI non-goal.
 
-Milestone 15 is intentionally left as a one-line placeholder here — full
+## 16. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 16 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
