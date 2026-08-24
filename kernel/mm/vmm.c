@@ -43,13 +43,19 @@ static inline uint64_t pdpt_index(uint64_t va) { return (va >> 30) & 0x1ff; }
 static inline uint64_t pd_index(uint64_t va)   { return (va >> 21) & 0x1ff; }
 static inline uint64_t pt_index(uint64_t va)   { return (va >> 12) & 0x1ff; }
 
-static uint64_t *get_pml4(void)
+uint64_t vmm_current_pml4(void)
 {
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
-    /* boot.asm's pml4 lives in .boot.bss, identity-mapped, so casting
-       the physical address straight to a pointer is valid. */
-    return (uint64_t *)(uintptr_t)(cr3 & PTE_ADDR_MASK);
+    return cr3 & PTE_ADDR_MASK;
+}
+
+static uint64_t *get_pml4(void)
+{
+    /* boot.asm's pml4 (and, since address spaces exist, any other
+       table CR3 might point at) lives within the low identity window,
+       so casting the physical address straight to a pointer is valid. */
+    return (uint64_t *)(uintptr_t)vmm_current_pml4();
 }
 
 static uint64_t *get_or_create_table(uint64_t *table, uint64_t index, bool user)
@@ -84,11 +90,16 @@ static uint64_t *get_or_create_table(uint64_t *table, uint64_t index, bool user)
     return (uint64_t *)(uintptr_t)(table[index] & PTE_ADDR_MASK);
 }
 
-bool vmm_map_page(uint64_t virt_addr, uint64_t phys_addr, uint64_t flags)
+bool vmm_map_page_in(uint64_t pml4_phys, uint64_t virt_addr, uint64_t phys_addr, uint64_t flags)
 {
     bool user = (flags & VMM_FLAG_USER) != 0;
 
-    uint64_t *pml4 = get_pml4();
+    /* pml4_phys must itself be identity-reachable, same requirement as
+       every table get_or_create_table allocates -- true for both
+       get_pml4() (the caller's own live table) and any PML4
+       vmm_create_address_space() just handed back (fresh
+       pmm_alloc_frame(), same guarantee). */
+    uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_phys;
     uint64_t *pdpt = get_or_create_table(pml4, pml4_index(virt_addr), user);
     uint64_t *pd   = get_or_create_table(pdpt, pdpt_index(virt_addr), user);
     uint64_t *pt   = get_or_create_table(pd, pd_index(virt_addr), user);
@@ -100,8 +111,58 @@ bool vmm_map_page(uint64_t virt_addr, uint64_t phys_addr, uint64_t flags)
 
     *pte = (phys_addr & PTE_ADDR_MASK) | PTE_PRESENT | flags;
 
+    /* Harmless (no-op) if pml4_phys isn't the currently active table --
+       there is nothing cached for an address space that was never
+       loaded. Necessary when it IS (the vmm_map_page() case below). */
     __asm__ volatile("invlpg (%0)" : : "r"(virt_addr) : "memory");
     return true;
+}
+
+bool vmm_map_page(uint64_t virt_addr, uint64_t phys_addr, uint64_t flags)
+{
+    return vmm_map_page_in(vmm_current_pml4(), virt_addr, phys_addr, flags);
+}
+
+uint64_t vmm_create_address_space(void)
+{
+    uint64_t new_pml4_frame = pmm_alloc_frame();
+    if (new_pml4_frame == 0 || new_pml4_frame >= VMM_IDENTITY_WINDOW_LIMIT) {
+        panic("vmm: address-space PML4 frame outside identity window");
+    }
+
+    uint64_t *new_pml4 = (uint64_t *)(uintptr_t)new_pml4_frame;
+    for (int i = 0; i < ENTRIES_PER_TABLE; i++) {
+        new_pml4[i] = 0;
+    }
+
+    /* Share the kernel half (PML4[511]: image + heap) by copying the
+       ENTRY (a pointer to the existing PDPT), not its contents -- see
+       this function's doc comment in vmm.h for why that keeps every
+       address space permanently in sync with kernel/heap growth, not
+       just at this snapshot in time.
+
+       ALSO share PML4[0] -- boot.asm's low identity map. Found the hard
+       way (a real triple/page-fault chain on the first per-process
+       boot, see ADR 0009): kernel code that runs under a PROCESS's CR3
+       (a syscall or exception handler -- neither SYSCALL nor an
+       interrupt switches CR3 on entry) still needs identity-mapped
+       kernel structures reachable: vmm.c's own page-table-walking
+       functions (get_pml4/is_user_page) cast the live CR3 straight to a
+       pointer, the VGA console writes straight to 0xB8000, and any
+       future kernel code doing the same would hit the identical
+       problem. Safe to share: every identity-mapped entry is
+       supervisor-only (boot.asm never sets the U bit there), so this
+       grants kernel CODE broader reach without granting RING-3 code in
+       that process anything new -- the leaf permissions ring 3 would
+       actually hit are unchanged. This is also exactly why process
+       code/stack (kernel/sched/task.c) live under PML4 index 1, not 0:
+       PML4[0] is now committed entirely to this shared identity map, so
+       nothing process-private can live there too. */
+    uint64_t *current_pml4 = get_pml4();
+    new_pml4[0] = current_pml4[0];
+    new_pml4[511] = current_pml4[511];
+
+    return new_pml4_frame;
 }
 
 void vmm_unmap_page(uint64_t virt_addr)

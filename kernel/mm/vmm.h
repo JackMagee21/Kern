@@ -30,6 +30,43 @@
    actually being created. */
 bool vmm_map_page(uint64_t virt_addr, uint64_t phys_addr, uint64_t flags);
 
+/* Same as vmm_map_page(), but into an EXPLICIT address space
+   (pml4_phys, as returned by vmm_create_address_space()) rather than
+   whatever CR3 currently is. Needed to build a new process's page
+   tables before that process is actually scheduled/active -- the
+   caller's own (kernel) address space stays loaded throughout, which
+   is what keeps the identity-mapping bootstrap trick (see
+   VMM_IDENTITY_WINDOW_LIMIT below) working: every table frame this
+   allocates is still reachable via the CALLER's identity map, not the
+   target address space's (which has none -- see
+   vmm_create_address_space()). vmm_map_page() is just this with
+   vmm_current_pml4(). */
+bool vmm_map_page_in(uint64_t pml4_phys, uint64_t virt_addr, uint64_t phys_addr, uint64_t flags);
+
+/* Physical address of the top-level page table CR3 currently points
+   at. */
+uint64_t vmm_current_pml4(void);
+
+/* Allocates a fresh top-level page table for a new process, with two
+   entries COPIED from the CALLER's current address space: PML4[511]
+   (kernel image + heap, see ADR 0004) and PML4[0] (boot.asm's low
+   identity map). Copying the entry (a pointer to the same physical
+   PDPT), not the tree it points to, means kernel code/data/heap stay
+   identical and stay in sync (any later kernel-heap growth is
+   automatically visible to every existing process too, since they all
+   reference the same underlying PDPT frame) across every address space
+   forever, not just at creation time. PML4[0] must be shared too, not
+   just PML4[511]: kernel code that later runs under this process's CR3
+   (a syscall or exception handler -- neither SYSCALL nor an interrupt
+   switches CR3 on entry) still needs identity-mapped structures
+   reachable (page-table walkers casting CR3 to a pointer, the VGA
+   console's direct 0xB8000 access, etc). Safe to share: every
+   identity-mapped entry is supervisor-only, so this grants kernel CODE
+   broader reach without granting ring-3 code in the process anything
+   new. See ADR 0009 for the real bug found before this was shared.
+   Panics if a frame can't be allocated. */
+uint64_t vmm_create_address_space(void);
+
 /* Unmaps virt_addr if mapped; no-op otherwise. Does NOT free the
    underlying physical frame -- that's the caller's job (pmm_free_frame),
    kept separate on purpose (small single-purpose functions). */
