@@ -4,6 +4,8 @@
 #include "drivers/console.h"
 #include "drivers/keyboard.h"
 #include "drivers/pit.h"
+#include "drivers/rtc.h"
+#include "../libk/fmt.h"
 
 #define SHELL_LINE_MAX 128
 
@@ -33,6 +35,19 @@ static bool str_starts_with(const char *s, const char *prefix)
         prefix++;
     }
     return true;
+}
+
+/* Zero-padded 2-digit decimal, for date/time fields (u32_to_dec()
+   itself never pads -- that's a display concern specific to this
+   command, not something the general libk helper should bake in). */
+static void write_2digit(uint32_t value)
+{
+    char digits[11];
+    if (value < 10) {
+        console_putc('0');
+    }
+    u32_to_dec(value, digits);
+    console_write(digits);
 }
 
 static void read_line(char *buf, int max_len)
@@ -68,11 +83,29 @@ static void run_command(const char *line)
     }
 
     if (str_eq(line, "help")) {
-        console_write("commands: help, echo <text>, uptime, clear\n");
+        console_write("commands: help, echo <text>, uptime, date, clear\n");
     } else if (str_eq(line, "uptime")) {
         console_write("ticks: 0x");
         console_write_hex(pit_get_ticks());
         console_write("\n");
+    } else if (str_eq(line, "date")) {
+        rtc_time_t now;
+        rtc_read(&now);
+
+        char year_digits[11];
+        u32_to_dec(now.year, year_digits);
+        console_write(year_digits);
+        console_putc('-');
+        write_2digit(now.month);
+        console_putc('-');
+        write_2digit(now.day);
+        console_putc(' ');
+        write_2digit(now.hour);
+        console_putc(':');
+        write_2digit(now.minute);
+        console_putc(':');
+        write_2digit(now.second);
+        console_write(" UTC (from CMOS RTC)\n");
     } else if (str_eq(line, "clear")) {
         console_clear();
     } else if (str_eq(line, "echo")) {
