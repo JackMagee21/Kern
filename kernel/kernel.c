@@ -7,12 +7,37 @@
 #include "arch/x86_64/idt.h"
 #include "mm/pmm.h"
 #include "mm/heap.h"
+#include "sched/scheduler.h"
+#include "sched/task.h"
 #include "panic.h"
 
 #define TIMER_FREQUENCY_HZ 100u
 #define TIMER_SELFTEST_TARGET_TICKS 100u /* ~1 real second at 100Hz */
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289u
+
+/* Milestone 6 self-test: two kernel threads that never voluntarily
+   yield, proving the scheduler forcibly preempts a task that never
+   gives up the CPU on its own -- not just that cooperative switching
+   works. Single-writer-per-counter (each task only increments its own),
+   kernel_main only reads them, so no synchronization is needed (same
+   reasoning as pit.c's tick_count). */
+static volatile uint64_t demo_task_a_ticks;
+static volatile uint64_t demo_task_b_ticks;
+
+static void demo_task_a(void)
+{
+    for (;;) {
+        demo_task_a_ticks++;
+    }
+}
+
+static void demo_task_b(void)
+{
+    for (;;) {
+        demo_task_b_ticks++;
+    }
+}
 
 void kernel_main(uint32_t magic, uint32_t mbi_addr)
 {
@@ -96,6 +121,17 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
 
     pic_remap();
     pit_init(TIMER_FREQUENCY_HZ);
+
+    /* Milestone 6: scheduler owns IRQ0 now (it calls pit_tick() itself
+       -- see kernel/sched/scheduler.c), so it must be wired up before
+       ticks start flowing. Bootstrap task represents kernel_main's own
+       context; the two demo tasks join the round-robin before
+       interrupts are enabled. */
+    scheduler_init();
+    scheduler_add_task(task_create(demo_task_a));
+    scheduler_add_task(task_create(demo_task_b));
+    serial_write("[OK] scheduler initialized, 2 demo tasks created\n");
+
     pic_clear_mask(0); /* unmask IRQ0 (timer) only -- nothing else has a handler yet */
     __asm__ volatile("sti");
     serial_write("[OK] pic/pit initialized, timer IRQ0 unmasked\n");
@@ -111,10 +147,25 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     serial_write_hex(pit_get_ticks());
     serial_write(" ticks received via IRQ0)\n");
 
-    /* Steady state: idle, servicing timer interrupts forever. Unlike
-       every earlier milestone, there's no reason to end in a deliberate
-       panic anymore -- the kernel now has a legitimate, ongoing reason
-       to keep running. */
+    /* Milestone 6 self-test: by now ~1 real second (100 ticks) has
+       elapsed. If preemption weren't actually forcing the CPU away from
+       a busy-looping task, one of these would still be exactly 0 --
+       whichever task happened to run first would simply never give it
+       up. Deliberately checking ">0", not some large threshold: the
+       exact count depends on host/QEMU speed, but "made any progress at
+       all while sharing the CPU with another non-yielding task" is a
+       fixed, meaningful bar regardless of speed. */
+    if (demo_task_a_ticks == 0 || demo_task_b_ticks == 0) {
+        panic("scheduler self-test failed: a demo task never got scheduled");
+    }
+    serial_write("[OK] scheduler self-test passed, task A: 0x");
+    serial_write_hex(demo_task_a_ticks);
+    serial_write(", task B: 0x");
+    serial_write_hex(demo_task_b_ticks);
+    serial_write(" (both made progress under preemption)\n");
+
+    /* Steady state: idle, servicing timer interrupts (and now, the
+       round-robin scheduler) forever. */
     for (;;) {
         __asm__ volatile("hlt");
     }
