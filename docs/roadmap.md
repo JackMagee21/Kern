@@ -166,11 +166,51 @@ a registered handler — no keyboard (IRQ1) or other device driver yet;
 `irq_register_handler` supports exactly one handler per line, no
 chaining (nothing needs to share a line yet).
 
-## 6. Preemptive scheduler + context switch (single CPU)
+## 6. Preemptive scheduler + context switch (single CPU) — DONE
+**Proves:** the kernel can forcibly preempt a running task and resume a
+different one, on the timer's schedule, not the task's own — the
+foundation Milestone 7's process model needs.
+**Deliverables:**
+- `kernel/sched/task.c/.h`: `task_t` (rsp, next, id) and `task_create()`,
+  which builds a synthetic `trap_frame_t` on a fresh 16KiB kmalloc'd
+  stack so a never-yet-run task can be resumed through the exact same
+  `iretq` path a real interrupt uses.
+- `kernel/sched/scheduler.c/.h`: round-robin ready queue (circular
+  linked list), owns IRQ0 (calls `pit_tick()` itself), `scheduler_init`/
+  `scheduler_add_task`.
+- `kernel/arch/x86_64/common_stub.inc`: changed so `isr_handler`/
+  `irq_handler` return the `trap_frame_t*` to actually resume, instead
+  of the stub always restoring the one it saved — this is what makes a
+  context switch possible with no separate save/restore mechanism.
+  `isr_handler` always returns the same frame it was given (exceptions
+  never switch tasks); only the scheduler's IRQ0 handler can return a
+  different one.
+- `kernel/drivers/pit.c/.h`: no longer self-registers an IRQ0 handler;
+  now a plain hardware driver (`pit_init`/`pit_tick`/`pit_get_ticks`)
+  the scheduler depends on, not the other way around.
+- `kernel/kernel.c`: two demo kernel threads that never voluntarily
+  yield (`for(;;) counter++`, no `hlt`), proving *forced* preemption
+  specifically, not just cooperative switching.
+**Verification:** `make run` boots and prints (after all Milestones
+1-5 markers, unchanged) `[OK] scheduler initialized, 2 demo tasks
+created` then `[OK] scheduler self-test passed, task A: 0x8b77079, task
+B: 0x8812a58 (both made progress under preemption)` — ~146M vs ~143M
+increments, within 2.4% of each other, itself evidence of *fair*
+round-robin, not just "both nonzero." `tests/qemu/
+test_scheduler_selftest.sh` (new) independently verifies both counters
+are nonzero from the real output. All five earlier milestones' smoke
+tests re-verified passing, confirming the `common_stub.inc` signature
+change didn't regress exception/IRQ handling.
+**Design record:** `docs/adr/0006-preemptive-scheduler.md`.
+**Known limitation (accepted for this milestone only):** kernel threads
+only, single shared address space (no ring 3 — Milestone 7); no
+priorities or blocking (every task is always "in the rotation"); fixed
+16KiB stack per task, no guard page or overflow detection yet.
+
 ## 7. Userspace: ring 3, syscalls, process model
 ## 8. Later: FS, drivers, SMP (sequence TBD from what's learned above)
 
-Milestones 6–8 are intentionally left as one-line placeholders here — full
+Milestones 7–8 are intentionally left as one-line placeholders here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn.
