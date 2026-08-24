@@ -207,10 +207,54 @@ only, single shared address space (no ring 3 — Milestone 7); no
 priorities or blocking (every task is always "in the rotation"); fixed
 16KiB stack per task, no guard page or overflow detection yet.
 
-## 7. Userspace: ring 3, syscalls, process model
+## 7. Userspace: ring 3, syscalls, process model — DONE
+**Proves:** the kernel can run code at ring 3 with genuine privilege
+separation (can't execute privileged instructions or touch supervisor-
+only memory) and service syscalls from it safely, including validating
+user-supplied pointers before trusting them.
+**Deliverables:**
+- `kernel/arch/x86_64/gdt.c/.h`: extended with user code/data segments
+  and a TSS descriptor, in the specific order SYSRET's `+8`/`+16`
+  arithmetic requires (verified against Linux's `syscall_init()`).
+- `kernel/arch/x86_64/tss.c/.h`: 64-bit TSS (byte-exact layout verified
+  against Linux's `struct x86_hw_tss`), `tss_set_rsp0()` for per-task
+  kernel stacks.
+- `kernel/arch/x86_64/syscall.c/.h`, `syscall_entry.asm`: STAR/LSTAR/
+  SFMASK MSR programming, `EFER.SCE`, the SYSCALL/SYSRET entry stub
+  (can't reuse `common_stub.inc` — no IDT frame, manual stack switch,
+  `sysretq` not `iretq`), `sys_nop`/`sys_write` (the latter validated
+  via `vmm_is_user_range` before dereferencing anything).
+- `kernel/mm/vmm.c/.h`: `VMM_FLAG_USER`, U-bit propagation through
+  intermediate page-table levels (including upgrading pre-existing
+  ones — see ADR 0007 for the real bug this fixed), `vmm_is_user_range`.
+- `kernel/sched/task.c`, `user_demo.asm`: `task_create_user()` and the
+  ring-3 demo program — hand-written position-independent NASM, not
+  compiled C, since a normal C function lives inside the kernel's own
+  supervisor-only 2MiB pages (ADR 0007 explains why that rules it out).
+  Each ring-3 task gets its own dedicated kernel stack (a real
+  correctness requirement, not a nicety — worked out by hand before
+  writing code, see ADR 0007).
+**Verification:** `make run` boots and prints, after all Milestones 1-6
+markers unchanged: `[OK] tss/syscall initialized` → `[OK] scheduler
+initialized, 2 kernel + 1 ring-3 demo task created` → `[OK] hello from
+ring 3 via syscall` (the validated `sys_write`) → `[OK] syscall
+self-test passed, 0x223628 syscalls serviced from ring 3` (millions of
+`sys_nop` round-trips). `tests/qemu/test_ring3_syscall_selftest.sh`
+(new) verifies real sequencing, not just marker presence. All six
+earlier milestones' smoke tests re-verified passing. The first real
+boot attempt actually faulted (`#PF` at the ring-3 entry point,
+diagnosed via Milestone 2's own fault-dump infrastructure) before the
+fix — see ADR 0007's Verification section for the full story.
+**Design record:** `docs/adr/0007-ring3-syscalls-process-model.md`.
+**Known limitation (accepted for this milestone only):** one embedded
+demo task, shared address space — no fork/exec, no per-process page
+tables, no filesystem-loaded programs (no FS exists). No NX enforcement
+on data pages. Syscalls are non-preemptible (always resume the exact
+context that made them). Revisit alongside a real FS/ELF loader.
+
 ## 8. Later: FS, drivers, SMP (sequence TBD from what's learned above)
 
-Milestones 7–8 are intentionally left as one-line placeholders here — full
+Milestone 8 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn.
