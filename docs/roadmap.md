@@ -252,9 +252,54 @@ tables, no filesystem-loaded programs (no FS exists). No NX enforcement
 on data pages. Syscalls are non-preemptible (always resume the exact
 context that made them). Revisit alongside a real FS/ELF loader.
 
-## 8. Later: FS, drivers, SMP (sequence TBD from what's learned above)
+## 8. VGA console, PS/2 keyboard, interactive shell — DONE
+Redefined from the original "FS, drivers, SMP" placeholder: the user's
+actual next priority was making the kernel observable and usable on
+real hardware, not virtual-machine-only — every milestone through 7
+only ever produced output on COM1 serial, which most real PCs
+(especially laptops) don't have. FS and SMP are still not done; they're
+pushed to Milestone 9+ (see below), not abandoned.
+**Proves:** the kernel is observable and interactively usable without a
+serial cable — on-screen output, real keyboard input, and something to
+actually do once it boots.
+**Deliverables:**
+- `kernel/drivers/vga.c/.h`: legacy VGA text-mode console (0xB8000, 80x25,
+  hardware cursor tracking, scrolling). Works via legacy BIOS/CSM boot;
+  known limitation on UEFI-only boot with no CSM (ADR 0008).
+- `kernel/drivers/console.c/.h`: fans every write out to both serial
+  (keeps all seven earlier smoke tests working unchanged) and VGA.
+  `kernel_main`/`panic.c`/`exceptions.c`/ring-3's `sys_write` all
+  migrated from `serial_write`/`serial_putc` to `console_write`/
+  `console_putc`, so panics and self-tests are visible on a real screen.
+- `kernel/drivers/keyboard.c/.h`: PS/2 keyboard, IRQ1, Scancode Set 1,
+  US QWERTY, basic Shift support. Scancode table is kernel-only; the
+  producer/consumer queue is `libk/ring_buffer.c` (host-tested).
+- `kernel/shell.c/.h`: `help`/`echo`/`uptime`/`clear`, replacing
+  `kernel_main`'s trailing idle loop — the shell is just the bootstrap
+  task's new steady-state activity, no new scheduling concept needed.
+**Verification:** checked an assumption before starting (the ISO
+already supports UEFI boot via `x86_64-efi` GRUB modules — confirmed
+with `xorriso -report_el_torito`, not assumed). `make run` boots with
+serial output unchanged. VGA output verified visually via QEMU
+`screendump` screenshots (not just text), matching serial exactly,
+including the full `#BP` dump. Real keyboard input verified via QEMU
+monitor `sendkey` (actual virtual PS/2 controller, not a shortcut):
+typed `help` and `echo hello world` into a live boot, both correctly
+read/echoed/executed. `tests/qemu/test_shell_selftest.sh` (new)
+automates this with real synchronization (waits for the shell-prompt
+marker before sending keys, not a guessed delay) — run 3x with no
+flakiness. `tests/host/test_ring_buffer.c` (new, 4 tests) passes. All
+seven earlier milestones' smoke tests and all three host tests
+re-verified passing.
+**Design record:** `docs/adr/0008-vga-keyboard-shell.md`.
+**Known limitation (accepted for this milestone only):** VGA text mode
+doesn't work on UEFI-only boot without CSM (no framebuffer console
+yet); keyboard has no Caps Lock/Ctrl/Alt/function-key/numpad support;
+shell has no scripting, variables, or piping.
 
-Milestone 8 is intentionally left as a one-line placeholder here — full
+## 9. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 9 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn.
