@@ -224,39 +224,24 @@ task_t *task_create_user(void)
     return task_create_user_image(user_elf_image_start, user_elf_image_end);
 }
 
-/* Milestone 18 (ADR 0018): forking a process's address space. Runs
-   under the PARENT's own CR3 (task_fork() is only ever called from
-   sys_fork, itself only ever reached mid-syscall -- SYSCALL never
-   switches CR3, so the parent's mappings are directly readable via
-   ordinary virtual addresses right now, no special access trick
-   needed for the SOURCE side, unlike the ELF loader's need to write a
-   brand new, not-yet-mapped-anywhere DESTINATION frame directly via
-   its physical address). */
+/* Milestone 21 (ADR 0021): forking a process's address space is now
+   copy-on-write, not an eager byte-for-byte copy -- see
+   vmm_fork_cow_page() (kernel/mm/vmm.c) for the actual mechanism
+   (downgrade parent's mapping to read-only+COW in place, share the
+   SAME frame into the child, refcount it). Runs under the PARENT's own
+   CR3 (task_fork() is only ever called from sys_fork, itself only ever
+   reached mid-syscall -- SYSCALL never switches CR3), which is exactly
+   what lets vmm_fork_cow_page() downgrade the parent's own existing
+   mapping directly via `va`, no physical-address trick needed for that
+   side either. */
 typedef struct {
     uint64_t dest_pml4;
 } fork_copy_ctx_t;
 
-static void fork_copy_page(uint64_t va, uint64_t phys, uint64_t flags, void *ctx_)
+static void fork_share_page(uint64_t va, uint64_t phys, uint64_t flags, void *ctx_)
 {
-    (void)phys; /* the source frame's physical address is never dereferenced -- see comment above: read via va instead */
     fork_copy_ctx_t *ctx = (fork_copy_ctx_t *)ctx_;
-
-    uint64_t new_frame = pmm_alloc_frame();
-    if (new_frame == 0) {
-        panic("task_fork: pmm exhausted");
-    }
-
-    /* Milestone 19: written through the physical direct-map, not a raw
-       identity-window cast -- see ADR 0019. */
-    uint8_t *dst = (uint8_t *)(uintptr_t)vmm_phys_to_virt(new_frame);
-    const uint8_t *src = (const uint8_t *)(uintptr_t)va;
-    for (uint64_t b = 0; b < PMM_FRAME_SIZE; b++) {
-        dst[b] = src[b];
-    }
-
-    if (!vmm_map_page_in(ctx->dest_pml4, va, new_frame, flags)) {
-        panic("task_fork: vmm_map_page_in failed while copying the parent's address space");
-    }
+    vmm_fork_cow_page(ctx->dest_pml4, va, phys, flags);
 }
 
 task_t *task_fork(task_t *parent, const syscall_frame_t *parent_frame, uint64_t parent_user_rsp)
@@ -269,7 +254,7 @@ task_t *task_fork(task_t *parent, const syscall_frame_t *parent_frame, uint64_t 
     uint64_t child_pml4 = vmm_create_address_space();
 
     fork_copy_ctx_t ctx = { .dest_pml4 = child_pml4 };
-    vmm_for_each_user_page(parent->pml4, fork_copy_page, &ctx);
+    vmm_for_each_user_page(parent->pml4, fork_share_page, &ctx);
 
     uint64_t kernel_stack_base;
     uint64_t kernel_stack_top = alloc_kernel_stack(USER_KERNEL_STACK_SIZE, &kernel_stack_base);

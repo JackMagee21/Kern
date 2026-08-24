@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Milestone 18 (ADR 0018) smoke test: boot headless in QEMU and assert
 # sys_fork/sys_wait actually worked end to end -- a genuinely
-# independent child process ran (proving the address-space deep copy
-# was correct, not aliasing the parent), the parent's sys_wait
+# independent child process ran (proving the address space really is
+# independent, not aliasing the parent), the parent's sys_wait
 # eventually observed it exit, and the exit code sys_wait reported back
 # matches exactly what the child passed to sys_exit -- not just that
 # neither syscall crashed the kernel. sys_wait became genuinely
-# blocking in Milestone 20 (ADR 0020, test_blocking_wait_selftest.sh);
-# this test's own assertions are implementation-agnostic and didn't
-# need to change.
+# blocking in Milestone 20 (ADR 0020, test_blocking_wait_selftest.sh)
+# and fork's address-space sharing became copy-on-write in Milestone 21
+# (ADR 0021, test_cow_fork_selftest.sh); this test's own assertions are
+# implementation-agnostic and didn't need to change either time.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -63,8 +64,9 @@ fi
 # Four processes total must be reaped: the two independent "hello"
 # processes (Milestone 17) plus the fork demo's parent and its forked
 # child -- and the leak self-test must have passed, proving the child's
-# deep-copied address space (a fresh, private pmm allocation per page,
-# not shared with the parent) was fully reclaimed too.
+# address space (copy-on-write shared with the parent at fork time,
+# ADR 0021 -- refcounted, not a fresh unconditional pmm allocation per
+# page) was fully reclaimed too, down to the exact same baseline.
 reaped_count=$(grep -cF "exited and was reaped" "$SERIAL_LOG" 2>/dev/null || true)
 if [ "$reaped_count" -ne 4 ]; then
     echo "FAIL: expected exactly 4 'exited and was reaped' messages, got $reaped_count" >&2

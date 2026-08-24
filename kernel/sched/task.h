@@ -145,17 +145,21 @@ task_t *task_create_user_image(const uint8_t *image_start, const uint8_t *image_
    name. */
 task_t *task_create_user(void);
 
-/* Milestone 18 (ADR 0018): forks `parent` -- a ring-3 process that is
-   CURRENTLY EXECUTING a syscall (this must only ever be called from
-   sys_fork, kernel/arch/x86_64/syscall.c, while `parent` is the
-   scheduler's current_task and `parent_frame` is that exact syscall's
-   saved GPRs). Builds a brand new address space
-   (vmm_create_address_space()) and deep-copies every present,
-   process-private page from parent->pml4 into it byte-for-byte
-   (vmm_for_each_user_page() + a fresh pmm_alloc_frame() per page --
-   NOT copy-on-write; see ADR 0018 for why) at the SAME virtual
-   addresses, so the child's memory is a genuine snapshot of the
-   parent's at this exact instant. The child's initial resume context is
+/* Milestone 18 (ADR 0018), copy-on-write since Milestone 21 (ADR 0021):
+   forks `parent` -- a ring-3 process that is CURRENTLY EXECUTING a
+   syscall (this must only ever be called from sys_fork, kernel/arch/
+   x86_64/syscall.c, while `parent` is the scheduler's current_task and
+   `parent_frame` is that exact syscall's saved GPRs). Builds a brand
+   new address space (vmm_create_address_space()) and shares every
+   present, process-private page from parent->pml4 into it at the SAME
+   virtual address (vmm_for_each_user_page() + vmm_fork_cow_page() per
+   page -- the SAME physical frame, refcounted, not a fresh copy), so
+   the child's memory reads back identically to the parent's at this
+   exact instant even though nothing was actually byte-copied yet -- a
+   write from EITHER sibling to a writable shared page lazily triggers
+   the real copy (kernel/arch/x86_64/exceptions.c's #PF path,
+   vmm_handle_cow_fault()) only if and when it actually happens. The
+   child's initial resume context is
    a SYNTHETIC trap_frame_t built from parent_frame's GPRs (same
    register values the parent will resume with) plus parent_user_rsp
    (the parent's user-mode RSP at the moment of this syscall --

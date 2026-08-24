@@ -3,6 +3,7 @@
 #include "idt.h"
 #include "trap_frame.h"
 #include "../../drivers/console.h"
+#include "../../mm/vmm.h"
 
 /* Intel SDM Vol. 3A Table 6-1 "Protected-Mode Exceptions and
    Interrupts". Vectors 22-27/31 are architecturally reserved; 28-30 are
@@ -54,19 +55,44 @@ static void dump_field(const char *label, uint64_t value)
 
 /* CLAUDE.md safety rule 6: on unrecoverable error, print full state to
    serial before halt -- never fail silently, never auto-reboot. There
-   is no recovery path yet (no scheduler, no per-process fault
-   isolation), so every exception here is fatal, EXCEPT #BP (vector 3):
-   a breakpoint is architecturally meant to be resumable (that's the
-   entire point of int3 as a debugging primitive), so it's the one
-   exception this handler returns from normally (iretq resumes right
-   after the int3) instead of halting. This is what lets kernel_main's
-   Milestone 2 self-test coexist with Milestone 5's requirement that the
-   kernel keep running after boot to service timer IRQs. Returns the
-   frame to resume (common_stub.inc loads this into RSP before iretq);
-   always the same frame it was given -- exceptions never trigger a
-   Milestone 6 task switch, only irq_handler's timer path does. */
+   is no GENERAL recovery path (no per-process fault isolation for an
+   arbitrary fault), so every exception here is still fatal, EXCEPT:
+   #BP (vector 3) -- a breakpoint is architecturally meant to be
+   resumable (that's the entire point of int3 as a debugging primitive)
+   -- and, since Milestone 21 (ADR 0021), a #PF (vector 14) that turns
+   out to be a copy-on-write write fault (task_fork(), ADR 0018/0021),
+   resolved by vmm_handle_cow_fault() before any of the code below even
+   runs. Both are cases this handler returns from normally (iretq
+   resumes right at/after the faulting instruction) instead of halting.
+   The #BP case is what lets kernel_main's Milestone 2 self-test coexist
+   with Milestone 5's requirement that the kernel keep running after
+   boot to service timer IRQs. Returns the frame to resume
+   (common_stub.inc loads this into RSP before iretq); always the same
+   frame it was given -- exceptions never trigger a Milestone 6 task
+   switch, only irq_handler's timer path does. */
 trap_frame_t *isr_handler(trap_frame_t *frame)
 {
+    /* Milestone 21 (ADR 0021): a write fault on a copy-on-write page
+       (task_fork(), ADR 0018/0021) is EXPECTED, frequent, successful
+       control flow -- not a fault to report. Checked and resolved
+       here, silently, before any of the diagnostic printing below, the
+       same "the common/successful case doesn't get logged" reasoning
+       already applied elsewhere in this kernel (e.g. sys_nop). Error
+       code bit 0 (P) must be 1 (protection violation on an ALREADY-
+       PRESENT page, not a genuine not-present fault) and bit 1 (W/R)
+       must be 1 (a write, not a read) -- Intel SDM Vol. 3A Sec. 4.7
+       Table 4-12 -- checked before even calling vmm_handle_cow_fault(),
+       narrowing what it's ever asked about to exactly the shape a COW
+       fault can take; anything else (including a write fault on a page
+       that just isn't COW at all) falls through to the same fatal path
+       every other exception already takes. */
+    if (frame->vector == 14 && (frame->error_code & 0x3) == 0x3) {
+        uint64_t fault_addr = read_cr2();
+        if (vmm_handle_cow_fault(fault_addr)) {
+            return frame; /* resolved -- resume the faulting instruction, which now succeeds */
+        }
+    }
+
     console_write("\n[PANIC] exception: ");
     console_write(exception_names[frame->vector]);
     console_write("\n");

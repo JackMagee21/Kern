@@ -929,9 +929,79 @@ infinite block instead of an infinite poll). `sys_wait` is still the
 ONLY blocking syscall — no general sleep-queue/wake primitive exists
 yet; a future IPC/synchronization milestone would need one.
 
-## 21. FS, SMP, and whatever's learned by then (sequence TBD)
+## 21. Copy-on-write fork — DONE
+Motivated by Milestone 18's own named limitation (ADR 0018): `sys_fork`
+was a full eager deep copy specifically because no COW mechanism
+existed yet — wasteful for any page a child never actually modifies.
+Now buildable on top of two things this session already shipped:
+Milestone 19's general physical direct-map (a lazy copy's own
+bookkeeping needs to read/write an arbitrary physical frame directly)
+and, incidentally, Milestone 20's blocking `sys_wait` (reused as the
+new isolation self-test's own synchronization primitive, no new IPC
+needed).
+**Proves:** forking a process now shares pages lazily — a write from
+EITHER the parent or the child triggers a real, resolved `#PF` that
+privatizes just that one page — verified as ACTUALLY exercised (not
+just correct by luck) via a new fault-count self-test, AND verified as
+genuinely isolated (not accidentally aliased) via a dedicated parent/
+child divergent-write test.
+**Deliverables:**
+- `kernel/mm/pmm.c/.h`: a per-frame refcount array
+  (`pmm_frame_addref()`/`pmm_frame_refcount()`, new;
+  `pmm_free_frame()` now decrements-then-frees-at-zero instead of
+  freeing unconditionally) — every pre-existing exclusive-ownership
+  call site is behaviorally unchanged (refcount always goes 1 -> 0,
+  same as before).
+- `kernel/mm/vmm.h/.c`: new `VMM_FLAG_COW` PTE bit (bit 10);
+  `vmm_fork_cow_page()` (downgrades the PARENT's own live mapping to
+  read-only+COW in place via a new `find_pte()` walker, shares the
+  same frame into the child, addrefs it — or, for an already-read-only
+  page, just shares it outright, no COW needed); `vmm_handle_cow_fault()`
+  (resolves a write fault: takes the frame over in place if this is
+  already the last reference, otherwise copies via `vmm_phys_to_virt()`
+  and drops the old reference) plus `vmm_get_cow_fault_count()`.
+- `kernel/arch/x86_64/exceptions.c`: `isr_handler` checks for a COW
+  write-fault (`#PF`, error code P=1 W=1) and calls
+  `vmm_handle_cow_fault()` BEFORE any diagnostic printing — a resolved
+  COW fault is silent, expected, successful control flow, not a panic.
+  Confirmed (from `idt.c`, not assumed) that every exception vector is
+  an interrupt gate, so this always runs with interrupts masked —
+  never races another task's fault/fork on the same frame's refcount.
+- `kernel/sched/task.c`: `task_fork()`'s page-copy visitor replaced
+  with a one-line call to `vmm_fork_cow_page()` per page — the eager
+  byte-copy loop is gone.
+- `kernel/user/fork_demo.asm`: parent and child now both write a
+  DIFFERENT sentinel to the same originally-shared `.data` variable;
+  the parent's readback (guaranteed strictly after the child's own
+  write+exit, via Milestone 20's blocking `sys_wait`) must see its OWN
+  value, proving real isolation, not aliasing.
+- `kernel/kernel.c`: new self-test panics if
+  `vmm_get_cow_fault_count()` is ever 0 after the fork demo runs —
+  proves sharing was genuinely lazy, not just correct.
+**Verification:** `make run` boots and prints every Milestone 1-20
+marker unchanged plus the new COW isolation and fault-count markers
+(fault count = 3, hand-verified: parent's `child_pid` write, parent's
+`shared_var` write [copy branch, still shared], child's `shared_var`
+write [in-place-takeover branch, already the last reference]).
+`-d int,cpu_reset` trace: exactly 3 `#PF` events (the first milestone
+where `#PF` is an EXPECTED, counted vector rather than zero-tolerance),
+zero double-fault/reset. `tests/qemu/test_cow_fork_selftest.sh` (new)
+independently checks both markers, the >= 3 fault-count assertion, and
+the frame-leak self-test. All twenty earlier smoke tests and all four
+host test suites re-verified passing (one header-comment update,
+`test_fork_wait_selftest.sh`, no assertion changes). Booted 5 times
+back to back, correct every time, no flakiness.
+**Design record:** `docs/adr/0021-cow-fork.md`.
+**Known limitation (accepted for this milestone only):** no demand
+paging / lazy allocation beyond fork's own COW sharing — every other
+page is still eagerly allocated. No VMA tracking (a separate future
+item). `frame_refcount[]` is `uint16_t` — a single frame shared by more
+than 65535 concurrent address spaces would silently wrap, accepted as
+unreachable at this kernel's current scale.
 
-Milestone 21 is intentionally left as a one-line placeholder here — full
+## 22. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 22 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
@@ -940,14 +1010,14 @@ a `sys_exec`-equivalent syscall (now that both a real loader, Milestone
 17, and real child processes, Milestone 18, exist to combine — though
 building it will need a genuinely new control-flow primitive, a
 synchronous mid-syscall resume that bypasses the normal `sysretq` path,
-flagged here rather than attempted casually), remaining memory maturity
-items (VMAs, demand paging/COW — now with both a concrete motivating use
-case, Milestone 18's eager fork copy, and the general physical
-direct-map, Milestone 19, to build it on top of), and a real
-sleep-queue/wake scheduler primitive generalizing Milestone 20's
-one-off `sys_wait`-specific blocking loop, once a second real caller
-motivates it (real IPC — pipes, shared memory, signals — would need
-exactly this) — plus a disk driver + real filesystem, ACPI-based
-shutdown, and SMP/networking, all explicitly flagged to the user rather
+flagged here rather than attempted casually), VMA tracking (a real
+per-process memory map instead of a few hardcoded regions — Milestone
+21's COW fork didn't need it, but demand paging beyond fork's own
+sharing would), and a real sleep-queue/wake scheduler primitive
+generalizing Milestone 20's one-off `sys_wait`-specific blocking loop,
+once a second real caller motivates it (real IPC — pipes, shared
+memory, signals — would need exactly this) — plus a disk driver + real
+filesystem, ACPI-based shutdown, and SMP/networking, all explicitly
+flagged to the user rather
 than started, still awaiting a decision. See `future.md` for a fuller
 continuation briefing.

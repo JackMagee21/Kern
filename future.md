@@ -17,7 +17,7 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 20 (2026-08-25)
+## State as of Milestone 21 (2026-08-25)
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -102,17 +102,39 @@ the design reasoning and any real bugs found along the way.
     race) by giving the fork demo's child a bounded spin longer than
     the parent's worst-case scheduling delay. See ADR 0020.
 
-**Testing state:** 20 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+21. **Copy-on-write fork** — `sys_fork` no longer eagerly deep-copies
+    the parent's address space (ADR 0018's original design): `task_fork()`
+    now calls `vmm_fork_cow_page()` (`kernel/mm/vmm.c`) per page, which
+    downgrades the PARENT's own existing mapping to read-only+`VMM_FLAG_COW`
+    in place and shares the SAME physical frame into the child
+    (refcounted via new `pmm_frame_addref()`/`pmm_frame_refcount()`,
+    `kernel/mm/pmm.c`). A write from either sibling `#PF`s and is
+    resolved by `vmm_handle_cow_fault()` — checked and handled silently
+    in `exceptions.c`'s `isr_handler` BEFORE any diagnostic printing,
+    confirmed to run with interrupts masked throughout (every exception
+    is an interrupt gate, `idt.c`) so it can never race another task's
+    fault on the same frame's refcount. Takes the frame over in place
+    (no copy) if this is already the last reference — the standard
+    real-COW optimization. `kernel/user/fork_demo.asm`'s parent and
+    child now write DIFFERENT sentinels to the same originally-shared
+    `.data` variable and the parent verifies (strictly after the
+    child's own write+exit, via Milestone 20's blocking `sys_wait`,
+    reused as this test's own synchronization primitive) that it still
+    sees its own value — proof of real isolation, not aliasing. A new
+    self-test (`vmm_get_cow_fault_count()`) proves sharing was
+    genuinely lazy, not just correct. See ADR 0021.
+
+**Testing state:** 21 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Every milestone has its own dedicated smoke test; run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** fourteen milestones
-(9-20) all followed the same pattern — implement, boot in QEMU for
+**A note on process discipline that held up well:** fifteen milestones
+(9-21) all followed the same pattern — implement, boot in QEMU for
 real, fix what actually breaks, write the ADR describing what was
 tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15 and 17-20 all landed correctly on
+logical pieces. Milestones 10-15 and 17-21 all landed correctly on
 the first real boot; Milestone 9 (per-process address spaces) and
 Milestone 16 (PS/2 mouse) each hit one genuine bug that needed real
 diagnosis (not guessing) to fix — both are documented in detail in
@@ -128,6 +150,12 @@ than reactively. Milestone 19 was also the first since Milestone 8 to
 need ZERO marker-text updates in any pre-existing smoke test — a sign
 the interface it touched (raw physical-address access) was internal
 enough that widening it didn't ripple into anything user-visible.
+Milestone 21 is the first milestone where `#PF` (page fault) became a
+genuinely expected, resolved-and-resumed exception rather than always
+fatal — verified not just by the self-test passing but by hand-counting
+the EXACT number of faults a `-d int,cpu_reset` trace should show (3)
+and confirming the trace matched that precise number, not just "some
+faults happened and nothing crashed."
 
 ## Explicitly flagged, NOT started — needs your decision
 
@@ -183,13 +211,12 @@ time:
   ADR 0009's CR3-switch-timing bug again before attempting this — it's
   the closest prior art in this codebase for "state must be fully
   consistent before you can safely resume through it."
-- **Remaining memory-maturity items**: VMAs (a real per-process memory
-  map instead of a few hardcoded regions), demand paging / copy-on-write
-  (Milestone 18's `sys_fork` is a full eager deep copy specifically
-  because this doesn't exist yet — see ADR 0018 for why building COW
-  wasn't attempted inline with fork itself; Milestone 19's direct-map,
-  ADR 0019, would make a page-fault-driven COW handler's own bookkeeping
-  simpler to build on top of, once attempted).
+- **VMAs — a real per-process memory map instead of a few hardcoded
+  regions.** Milestone 21 shipped COW fork (ADR 0021) without needing
+  this (the existing `vmm_for_each_user_page()`/PTE-flag approach was
+  enough), but any FURTHER demand-paging work beyond fork's own lazy
+  sharing (a genuinely on-demand-allocated heap/mmap-equivalent region,
+  precise per-region permission tracking) would need one.
 - **A real sleep-queue/wake scheduler primitive.** Milestone 20 made
   `sys_wait` genuinely blocking (ADR 0020), but deliberately via a
   one-off `sti; hlt; cli` retry loop scoped to just that syscall, not a

@@ -18,6 +18,22 @@
 static uint8_t frame_bitmap[PMM_BITMAP_BYTES]; /* zeroed by boot.asm's .bss clear */
 static uint64_t frames_free_count;
 
+/* Milestone 21 (ADR 0021, copy-on-write fork): one entry per frame,
+   same PMM_MAX_FRAMES sizing convention frame_bitmap already uses (a
+   flat array indexed by frame number, not a sparse structure -- simple
+   and consistent, and this kernel already accepts a fixed 4GiB-worth
+   bookkeeping cost for the bitmap, so one more byte-per-frame array is
+   the same kind of tradeoff, not a new one). 0 for a never-allocated or
+   currently-free frame; 1 the instant pmm_alloc_frame() hands it out
+   (its single implicit owner); only ever > 1 once pmm_frame_addref()
+   has been called on it at least once (COW-sharing a page across a
+   fork). uint16_t, not uint8_t: cheap headroom (2MiB total instead of
+   1MiB) against a frame being fork-shared by dozens of descendants
+   without silently wrapping -- still finite (65535), an accepted limit
+   for a hobby kernel with no realistic path to that many concurrent
+   forks of the same page. */
+static uint16_t frame_refcount[PMM_MAX_FRAMES]; /* zeroed by boot.asm's .bss clear */
+
 extern char kernel_end_lma[]; /* boot/linker.ld: physical end of the kernel image */
 
 static inline int bitmap_test(uint64_t frame)
@@ -131,10 +147,35 @@ uint64_t pmm_alloc_frame(void)
         if (!bitmap_test(frame)) {
             bitmap_set(frame);
             frames_free_count--;
+            frame_refcount[frame] = 1; /* the caller is this frame's single implicit owner */
             return frame * PMM_FRAME_SIZE;
         }
     }
     return 0;
+}
+
+void pmm_frame_addref(uint64_t phys_addr)
+{
+    if (phys_addr == 0 || phys_addr % PMM_FRAME_SIZE != 0) {
+        return;
+    }
+    uint64_t frame = phys_addr / PMM_FRAME_SIZE;
+    if (frame >= PMM_MAX_FRAMES || !bitmap_test(frame)) {
+        return; /* not currently allocated -- misuse, not a real reference to add */
+    }
+    frame_refcount[frame]++;
+}
+
+uint32_t pmm_frame_refcount(uint64_t phys_addr)
+{
+    if (phys_addr == 0 || phys_addr % PMM_FRAME_SIZE != 0) {
+        return 0;
+    }
+    uint64_t frame = phys_addr / PMM_FRAME_SIZE;
+    if (frame >= PMM_MAX_FRAMES || !bitmap_test(frame)) {
+        return 0;
+    }
+    return frame_refcount[frame];
 }
 
 void pmm_free_frame(uint64_t phys_addr)
@@ -146,10 +187,16 @@ void pmm_free_frame(uint64_t phys_addr)
     if (frame >= PMM_MAX_FRAMES) {
         return;
     }
-    if (bitmap_test(frame)) {
-        bitmap_clear(frame);
-        frames_free_count++;
+    if (!bitmap_test(frame)) {
+        return;
     }
+    if (frame_refcount[frame] > 1) {
+        frame_refcount[frame]--; /* still referenced elsewhere -- not actually free yet */
+        return;
+    }
+    frame_refcount[frame] = 0;
+    bitmap_clear(frame);
+    frames_free_count++;
 }
 
 uint64_t pmm_frames_free(void)

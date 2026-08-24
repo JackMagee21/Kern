@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include "vmm.h"
@@ -174,6 +175,112 @@ void vmm_direct_map_init(void)
 uint64_t vmm_phys_to_virt(uint64_t phys_addr)
 {
     return DIRECT_MAP_VIRT_BASE + phys_addr;
+}
+
+/* Milestone 21 (ADR 0021): walks the CURRENTLY ACTIVE table down to
+   virt_addr's own PTE and returns a pointer to it (so the caller can
+   both read AND overwrite it in place), or NULL if any level along the
+   way isn't present -- same read-only walk shape vmm_translate()/
+   vmm_unmap_page() already use, just returning the slot itself instead
+   of dereferencing it. Panics on an unexpected huge page: nothing in
+   this codebase's process-private region (where this is ever called)
+   creates one, so hitting one would mean a logic bug elsewhere, the
+   same defensive stance vmm_destroy_address_space()/
+   vmm_for_each_user_page() already take on the identical case. */
+static uint64_t *find_pte(uint64_t virt_addr)
+{
+    uint64_t *pml4 = get_pml4();
+
+    uint64_t pml4e = pml4[pml4_index(virt_addr)];
+    if (!(pml4e & PTE_PRESENT)) {
+        return NULL;
+    }
+    uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4e & PTE_ADDR_MASK);
+
+    uint64_t pdpte = pdpt[pdpt_index(virt_addr)];
+    if (!(pdpte & PTE_PRESENT)) {
+        return NULL;
+    }
+    if (pdpte & PTE_PS) {
+        panic("find_pte: unexpected 1GiB page in a process-private mapping");
+    }
+    uint64_t *pd = (uint64_t *)(uintptr_t)(pdpte & PTE_ADDR_MASK);
+
+    uint64_t pde = pd[pd_index(virt_addr)];
+    if (!(pde & PTE_PRESENT)) {
+        return NULL;
+    }
+    if (pde & PTE_PS) {
+        panic("find_pte: unexpected 2MiB page in a process-private mapping");
+    }
+    uint64_t *pt = (uint64_t *)(uintptr_t)(pde & PTE_ADDR_MASK);
+
+    return &pt[pt_index(virt_addr)];
+}
+
+void vmm_fork_cow_page(uint64_t dest_pml4, uint64_t va, uint64_t phys, uint64_t flags)
+{
+    uint64_t child_flags = flags;
+
+    if (flags & VMM_FLAG_WRITABLE) {
+        uint64_t *parent_pte = find_pte(va);
+        if (parent_pte == NULL || !(*parent_pte & PTE_PRESENT)) {
+            panic("vmm_fork_cow_page: parent's own page vanished mid-fork");
+        }
+        *parent_pte = (*parent_pte & ~VMM_FLAG_WRITABLE) | VMM_FLAG_COW;
+        __asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
+
+        child_flags = (flags & ~VMM_FLAG_WRITABLE) | VMM_FLAG_COW;
+    }
+
+    if (!vmm_map_page_in(dest_pml4, va, phys, child_flags)) {
+        panic("vmm_fork_cow_page: failed to map child's shared page");
+    }
+    pmm_frame_addref(phys);
+}
+
+static uint64_t cow_fault_count;
+
+bool vmm_handle_cow_fault(uint64_t fault_addr)
+{
+    uint64_t page = fault_addr & ~(uint64_t)0xfff;
+    uint64_t *pte = find_pte(page);
+    if (pte == NULL || !(*pte & PTE_PRESENT) || !(*pte & VMM_FLAG_COW)) {
+        return false;
+    }
+
+    uint64_t old_frame = *pte & PTE_ADDR_MASK;
+    uint64_t common_flags = *pte & (VMM_FLAG_USER | VMM_FLAG_NX | VMM_FLAG_OWNED);
+
+    if (pmm_frame_refcount(old_frame) <= 1) {
+        /* Last reference: take the existing frame over in place, no
+           copy needed -- every sibling that shared it has already
+           copied out (or there never was one). */
+        *pte = old_frame | PTE_PRESENT | PTE_WRITABLE | common_flags;
+    } else {
+        uint64_t new_frame = pmm_alloc_frame();
+        if (new_frame == 0) {
+            panic("vmm_handle_cow_fault: pmm exhausted");
+        }
+
+        uint8_t *dst = (uint8_t *)(uintptr_t)vmm_phys_to_virt(new_frame);
+        const uint8_t *src = (const uint8_t *)(uintptr_t)vmm_phys_to_virt(old_frame);
+        for (uint64_t b = 0; b < PMM_FRAME_SIZE; b++) {
+            dst[b] = src[b];
+        }
+
+        *pte = new_frame | PTE_PRESENT | PTE_WRITABLE | common_flags;
+        pmm_free_frame(old_frame); /* drop THIS address space's own reference */
+    }
+
+    __asm__ volatile("invlpg (%0)" : : "r"(page) : "memory");
+    cow_fault_count++;
+    return true;
+}
+
+uint64_t vmm_get_cow_fault_count(void)
+{
+    return cow_fault_count;
 }
 
 bool vmm_map_page_in(uint64_t pml4_phys, uint64_t virt_addr, uint64_t phys_addr, uint64_t flags)

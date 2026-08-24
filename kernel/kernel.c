@@ -441,6 +441,22 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(syscall_get_wait_block_count());
     console_write(" turns) before the fork demo's child exited\n");
 
+    /* Milestone 21 (ADR 0021): proves fork's page sharing is genuinely
+       lazy/fault-driven, not just correct -- a zero count here would
+       mean every "shared" page happened to never be written by either
+       sibling this boot, so vmm_handle_cow_fault() went completely
+       untested even though fork_demo.asm's own COW isolation message
+       above passed. The fork demo's parent AND child both write to the
+       same originally-shared .data page (kernel/user/fork_demo.asm),
+       so this is guaranteed >= 2 (one fault per sibling) whenever that
+       message passes. */
+    if (vmm_get_cow_fault_count() == 0) {
+        panic("copy-on-write self-test failed: no COW fault was ever resolved");
+    }
+    console_write("[OK] copy-on-write self-test passed, ");
+    console_write_hex(vmm_get_cow_fault_count());
+    console_write(" page(s) copied lazily on first write, not eagerly at fork time\n");
+
     /* Steady state: an interactive shell instead of a bare idle loop --
        this is what actually makes the kernel usable sitting at real
        hardware. Still just one more participant in the scheduler's

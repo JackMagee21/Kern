@@ -22,6 +22,21 @@
 ; That single call succeeding (with the right exit code) is itself the
 ; proof this milestone changed sys_wait's behavior, not just an
 ; implementation detail underneath the same observable interface.
+;
+; Milestone 21 (ADR 0021): fork is now copy-on-write -- shared_var
+; (.data, so it's a WRITABLE PT_LOAD segment, COW-eligible) starts at a
+; known baseline, identical in both parent and child right after fork
+; since neither has written it YET (both still point at the SAME
+; physical frame at that instant). The parent writes one sentinel value
+; to it, the child writes a DIFFERENT one and exits -- if COW sharing
+; ever accidentally aliased instead of properly isolating the two
+; address spaces, the parent's later readback (guaranteed to happen
+; strictly AFTER the child's own write and exit, via the same blocking
+; sys_wait above) would observe the CHILD's value instead of its own.
+; That readback is the actual isolation proof; kernel_main's own
+; self-test (vmm_get_cow_fault_count()) separately proves the sharing
+; was genuinely lazy/fault-driven in the first place, not eagerly
+; copied at fork time.
 
 default rel
 bits 64
@@ -40,6 +55,12 @@ _start:
     ; --- parent branch: rax = child's pid ---
     mov [child_pid], rax
 
+    ; Milestone 21 (ADR 0021): parent's own write to the shared .data
+    ; page -- triggers ITS OWN COW fault (independent of whatever the
+    ; child later does to its own copy).
+    mov rax, 0xAAAAAAAAAAAAAAAA
+    mov [shared_var], rax
+
     mov rdi, [child_pid]
     lea rsi, [exit_code_buf]
     mov eax, 4          ; SYS_WAIT -- blocks until the child exits (Milestone 20)
@@ -53,11 +74,32 @@ _start:
     mov rsi, msg_parent_ok_len
     mov eax, 1           ; SYS_WRITE
     syscall
-    jmp .parent_exit
+    jmp .cow_check
 
 .parent_bad:
     mov rdi, msg_parent_bad
     mov rsi, msg_parent_bad_len
+    mov eax, 1
+    syscall
+
+.cow_check:
+    ; Milestone 21 (ADR 0021): readback happens strictly AFTER the
+    ; child's own write+exit (guaranteed by the blocking sys_wait
+    ; above) -- the strongest ordering to catch accidental aliasing.
+    mov rax, [shared_var]
+    mov rbx, 0xAAAAAAAAAAAAAAAA
+    cmp rax, rbx
+    jne .cow_bad
+
+    mov rdi, msg_cow_ok
+    mov rsi, msg_cow_ok_len
+    mov eax, 1
+    syscall
+    jmp .parent_exit
+
+.cow_bad:
+    mov rdi, msg_cow_bad
+    mov rsi, msg_cow_bad_len
     mov eax, 1
     syscall
 
@@ -71,6 +113,12 @@ _start:
     mov rsi, msg_child_len
     mov eax, 1             ; SYS_WRITE
     syscall
+
+    ; Milestone 21 (ADR 0021): child's own write to the SAME shared
+    ; .data page, a DIFFERENT value than the parent's -- must never be
+    ; visible through the parent's own mapping.
+    mov rax, 0xBBBBBBBBBBBBBBBB
+    mov [shared_var], rax
 
     ; Milestone 20 (ADR 0020): a bounded sys_nop spin, same magnitude
     ; hello.asm's own LOOP_COUNT already uses (Milestone 17) -- forces
@@ -104,6 +152,13 @@ msg_parent_ok: db "[OK] fork/wait self-test: child exit code verified", 10
 msg_parent_ok_len equ $ - msg_parent_ok
 msg_parent_bad: db "[FAIL] fork/wait self-test: unexpected child exit code", 10
 msg_parent_bad_len equ $ - msg_parent_bad
+msg_cow_ok: db "[OK] COW isolation verified: parent's write survived the child's own write", 10
+msg_cow_ok_len equ $ - msg_cow_ok
+msg_cow_bad: db "[FAIL] COW isolation broken: parent observed the child's write", 10
+msg_cow_bad_len equ $ - msg_cow_bad
+
+section .data
+shared_var: dq 0x1111111111111111
 
 section .bss
 child_pid: resq 1

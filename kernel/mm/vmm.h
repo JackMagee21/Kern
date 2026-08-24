@@ -37,6 +37,25 @@
    assuming. */
 #define VMM_IDENTITY_WINDOW_LIMIT 0x800000ULL
 
+#define VMM_FLAG_COW      (1ULL << 10) /* Milestone 21 (ADR 0021): AVL bit (see
+                                           VMM_FLAG_OWNED below for why bits 9-11 are
+                                           safe to repurpose), distinct from bit 9 so
+                                           the two are independently readable on the
+                                           same PTE. Marks a leaf mapping produced by
+                                           task_fork() that is PRESENT but deliberately
+                                           NOT WRITABLE, sharing its physical frame with
+                                           at least one other address space
+                                           (pmm_frame_addref()'d) -- a write to it is
+                                           expected to #PF (protection violation, not
+                                           not-present) and is resolved by
+                                           vmm_handle_cow_fault(), NOT treated as a real
+                                           fault. Cleared (alongside setting WRITABLE)
+                                           the moment that resolution happens, whether
+                                           via an actual copy or, if this was already
+                                           the last reference, an in-place takeover --
+                                           either way the mapping is fully private and
+                                           ordinary again afterward, this bit never
+                                           reappears on it. */
 #define VMM_FLAG_OWNED    (1ULL << 9) /* bits 9-11 are AVL (available for OS use) at
                                           every page-table level per Intel SDM Vol. 3A
                                           Sec. 4.5 -- doesn't collide with any
@@ -229,5 +248,64 @@ void vmm_direct_map_init(void);
    callers, etc.): internal callers are trusted, not re-validated at
    every layer. */
 uint64_t vmm_phys_to_virt(uint64_t phys_addr);
+
+/* Milestone 21 (ADR 0021, copy-on-write fork): called once per
+   present, user, OWNED leaf page task_fork()'s
+   vmm_for_each_user_page() visitor finds in the PARENT (kernel/sched/
+   task.c) -- shares the SAME physical frame (phys) into the CHILD's
+   address space (dest_pml4) at the same virtual address (va), instead
+   of the eager pmm_alloc_frame()+byte-copy ADR 0018 originally shipped.
+   If flags includes VMM_FLAG_WRITABLE: downgrades the PARENT's own
+   EXISTING mapping to read-only+VMM_FLAG_COW IN PLACE (task_fork() only
+   ever runs under the forking process's own live CR3, ADR 0007 --
+   `va` is directly reachable on the CURRENTLY ACTIVE table, no
+   physical-address trick needed for this side either, the same fact
+   ADR 0018 already relied on for reading the parent's pages) and maps
+   the child's new leaf with the same read-only+COW treatment -- a
+   subsequent write from EITHER sibling #PFs and is resolved lazily by
+   vmm_handle_cow_fault(), not copied now. If flags does NOT include
+   VMM_FLAG_WRITABLE (permanently read-only, e.g. an ELF image's code/
+   .rodata segments), no COW protection is needed at all -- shared
+   forever exactly as-is, since neither side can ever write it. Either
+   way, calls pmm_frame_addref(phys) once to account for the child's
+   new reference; the parent's own pre-existing reference is untouched.
+   Panics if the child's mapping can't be created (vmm_map_page_in
+   failure) or if the parent's own page has vanished mid-fork (would
+   mean a logic bug elsewhere, not recoverable input -- task_fork()
+   runs with nothing else able to touch the parent's address space
+   concurrently). */
+void vmm_fork_cow_page(uint64_t dest_pml4, uint64_t va, uint64_t phys, uint64_t flags);
+
+/* Milestone 21 (ADR 0021): resolves a write fault (kernel/arch/x86_64/
+   exceptions.c's isr_handler, vector 14/#PF) at fault_addr IF it lands
+   on a page vmm_fork_cow_page() marked VMM_FLAG_COW in the CURRENTLY
+   ACTIVE address space -- returns true (fault fully resolved, safe to
+   resume the faulting instruction, which will now succeed) or false
+   (not a COW fault at all -- not present, or present but not
+   VMM_FLAG_COW -- caller must treat this as a genuine, unhandled
+   fault). When resolving: if pmm_frame_refcount() on the shared frame
+   is already down to 1 (every other sibling already copied out, or
+   there never was one), takes the frame over in place -- just flips
+   WRITABLE on and COW off, no copy, the standard real-COW
+   optimization. Otherwise allocates a fresh frame, copies the shared
+   frame's content into it (via vmm_phys_to_virt() on both sides,
+   Milestone 19), remaps THIS address space's own leaf to the new frame
+   (writable, COW cleared), and drops this address space's reference to
+   the old one (pmm_free_frame()). Runs entirely with interrupts masked
+   (#PF is an interrupt-gate exception, idt.c -- confirmed, not assumed)
+   so this can never race another task's own fault or fork on the same
+   shared frame's refcount. Panics if pmm is exhausted mid-resolution
+   (the same "can't recover, don't pretend to" stance every other
+   allocation-failure panic in this codebase already takes). */
+bool vmm_handle_cow_fault(uint64_t fault_addr);
+
+/* Milestone 21 (ADR 0021): total number of COW faults
+   vmm_handle_cow_fault() has actually resolved (either branch) so far
+   -- lets kernel_main's self-test prove COW pages are genuinely
+   fault-driven (never copied eagerly at fork time), not just that
+   fork/wait still works, the same "prove the NEW behavior was actually
+   exercised" pattern Milestone 20's syscall_get_wait_block_count()
+   already established. */
+uint64_t vmm_get_cow_fault_count(void);
 
 #endif /* KERNEL_MM_VMM_H */
