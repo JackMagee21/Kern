@@ -737,16 +737,85 @@ ELF image is embedded/statically linked at build time), no
 `fork`/`exec` (every process is still spawned directly by
 `kernel_main`).
 
-## 18. FS, SMP, and whatever's learned by then (sequence TBD)
+## 18. `sys_fork`, non-blocking `sys_wait`, and exit codes — DONE
+Second of `future.md`'s "reasonable next steps": Milestone 10 built
+`sys_exit`/teardown but explicitly deferred `fork`/`exec`-equivalent
+syscalls and a parent/child relationship, since nothing had a parent
+process concept yet. Milestone 17's ELF loader made `exec` meaningful;
+`fork` is the more foundational half of that pair, so it came first.
+**Proves:** a ring-3 process can fork into a genuinely independent
+child (its own deep-copied address space, not aliasing the parent), and
+the parent's non-blocking `sys_wait` correctly observes exactly the
+exit code the child passed to `sys_exit` — not just that neither
+syscall crashes the kernel.
+**Deliverables:**
+- `kernel/mm/vmm.h/.c`: `vmm_for_each_user_page()` — read-only
+  enumeration of every present leaf mapping in a process's private
+  region, reusing `vmm_destroy_address_space()`'s traversal shape.
+- `kernel/arch/x86_64/syscall_entry.asm`: `saved_user_rsp` promoted
+  from file-local to `global`, exposing the user RSP at syscall time to
+  C (`syscall_get_user_rsp()`) — needed to build a forked child's
+  resume context.
+- `kernel/arch/x86_64/syscall.h/.c`: `SYS_FORK`/`SYS_WAIT`; `sys_fork()`
+  (wraps `task_fork()`); `sys_wait()` (non-blocking, writes the exit
+  code to a validated user pointer); `sys_exit`'s calling convention
+  extended with an exit-code argument (`rdi`).
+- `kernel/sched/task.h/.c`: `task_t` gained `parent_id`/`exit_code`;
+  `task_create_user()` split into a thin wrapper over the new
+  `task_create_user_image()` (any embedded image, not just `hello.elf`);
+  `task_fork()` — deep-copies the parent's address space
+  page-by-page and builds the child's synthetic resume `trap_frame_t`
+  from the parent's in-flight `syscall_frame_t`, with `rax` forced to 0.
+- `kernel/sched/scheduler.h/.c`: `scheduler_exit_current()` now takes
+  an exit code; `scheduler_current_task()`; `scheduler_try_wait()` and
+  a new `collected_head` chain (reaped-but-unwaited-for children,
+  cli/sti-protected on both sides); the reaper only immediately
+  `kfree()`s an orphan's `task_t` now, deferring a parented one.
+- `kernel/user/fork_demo.asm` (new), `kernel/sched/fork_demo_blob.asm`
+  (new): a real ring-3 program that forks once, verifies its child's
+  exit code via a poll loop over `sys_wait`.
+- `kernel/kernel.c`: spawns the fork/wait demo as a third orphan
+  process alongside the two `hello` ones; the frame-leak self-test's
+  reap threshold raised from 2 to 4.
+**Verification:** `make run` boots and prints, after all Milestones
+1-17 markers unchanged, the fork/wait demo's creation line, the
+child's own message, the parent's exit-code-verified message, four
+"exited and was reaped" lines, then the existing self-tests passing
+with the process-lifecycle self-test's frame count matching the
+pre-creation baseline EXACTLY (proving the child's private deep-copied
+memory came back too, not just the two hello processes').
+`tests/qemu/test_fork_wait_selftest.sh` (new) independently checks real
+sequencing, the exact verification message, absence of its `[FAIL]`
+counterpart, and the four-reaps/leak-free combination.
+`test_process_lifecycle_selftest.sh` needed its exact reaped-count
+assertion updated from 2 to 4 (scope growth, not a behavior fix). All
+eighteen earlier smoke tests and all three pre-existing host test
+suites re-verified passing. Booted 4 times back to back with identical
+shape each time — correct on the first real attempt, no flakiness.
+**Design record:** `docs/adr/0018-fork-wait-exit-codes.md`.
+**Known limitation (accepted for this milestone only):** no
+copy-on-write (every fork is a full eager deep copy); no blocking
+`wait()` (poll-based only — this kernel's syscalls are still
+non-preemptible with interrupts masked throughout, ADR 0007); no
+`exec`-equivalent syscall yet (a forked child always runs its parent's
+exact image); no reparenting of orphaned children (an exited parent's
+never-`wait()`-ed-for child's `task_t` struct would leak, though its
+memory is still reclaimed unconditionally by the reaper); no process
+groups, signals, or `SIGCHLD`-equivalent notification.
 
-Milestone 18 is intentionally left as a one-line placeholder here — full
+## 19. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 19 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
-`fork`/`exec`-equivalent syscalls (now that a real loader exists to
-`exec` INTO), remaining memory maturity items (VMAs, demand paging/COW,
-a general physical direct-map), and synchronization/IPC — plus a disk
+a `sys_exec`-equivalent syscall (now that both a real loader, Milestone
+17, and real child processes, Milestone 18, exist to combine), remaining
+memory maturity items (VMAs, demand paging/COW — now with a concrete
+motivating use case, Milestone 18's eager fork copy — and a general
+physical direct-map), and synchronization/IPC (motivated by Milestone
+18's polling `sys_wait`, which a real blocking wait needs) — plus a disk
 driver + real filesystem, ACPI-based shutdown, and SMP/networking, all
 explicitly flagged to the user rather than started, still awaiting a
 decision. See `future.md` for a fuller continuation briefing.

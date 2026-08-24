@@ -76,6 +76,25 @@ static task_t *current_task;
 static task_t *zombie_head;
 static uint64_t reaped_count;
 
+/* Milestone 18 (ADR 0018): tasks the reaper has already reclaimed the
+   RESOURCES of (address space, stacks) but which have a parent
+   (parent_id != 0) and so must stay alive -- task_t, id, exit_code --
+   until scheduler_try_wait() collects them. Reuses task_t::next a
+   THIRD time (ready queue -> zombie_head chain -> this chain; a task
+   is only ever in one of the three at once, so this isn't a real
+   conflict, same reasoning ADR 0010 already used for the first reuse).
+   Producer (reaper_task, a normal preemptible kernel thread) and
+   consumer (scheduler_try_wait, called from syscall context) both wrap
+   their access in cli/sti -- unlike zombie_head (produced from
+   INTERRUPT context, which is inherently atomic w.r.t. itself on one
+   CPU), the reaper's push here is normal-context code that COULD
+   itself be preempted mid-update, so both sides need the critical
+   section this time. cli/sti is a full mutual-exclusion primitive on
+   this single-CPU kernel (CLAUDE.md safety rule 1, generalized beyond
+   "interrupt handler" to "the only other context that could ever run
+   concurrently") -- not a workaround pending real locks. */
+static task_t *collected_head;
+
 uint64_t scheduler_current_pml4;
 uint64_t scheduler_target_pml4;
 
@@ -135,13 +154,22 @@ static void reaper_task(void)
         console_write("[OK] process ");
         console_write_hex(dead->id);
         console_write(" exited and was reaped\n");
-        kfree(dead);
         reaped_count++;
+
+        if (dead->parent_id == 0) {
+            kfree(dead); /* orphan -- nothing will ever scheduler_try_wait() for it */
+        } else {
+            __asm__ volatile("cli");
+            dead->next = collected_head;
+            collected_head = dead;
+            __asm__ volatile("sti");
+        }
     }
 }
 
-void scheduler_exit_current(void)
+void scheduler_exit_current(uint64_t exit_code)
 {
+    current_task->exit_code = exit_code;
     current_task->state = TASK_ZOMBIE;
     __asm__ volatile("sti");
     for (;;) {
@@ -152,6 +180,38 @@ void scheduler_exit_current(void)
 uint64_t scheduler_reaped_count(void)
 {
     return reaped_count;
+}
+
+task_t *scheduler_current_task(void)
+{
+    return current_task;
+}
+
+uint32_t scheduler_try_wait(uint32_t caller_id, uint32_t target_pid, uint64_t *out_exit_code)
+{
+    __asm__ volatile("cli");
+    task_t **link = &collected_head;
+    task_t *found = NULL;
+    while (*link != NULL) {
+        if ((*link)->parent_id == caller_id && (target_pid == 0 || (*link)->id == target_pid)) {
+            found = *link;
+            *link = found->next;
+            break;
+        }
+        link = &(*link)->next;
+    }
+    __asm__ volatile("sti");
+
+    if (found == NULL) {
+        return 0;
+    }
+
+    uint32_t pid = found->id;
+    if (out_exit_code != NULL) {
+        *out_exit_code = found->exit_code;
+    }
+    kfree(found);
+    return pid;
 }
 
 void scheduler_init(void)
@@ -169,6 +229,8 @@ void scheduler_init(void)
     bootstrap->next = bootstrap; /* circular list of one, until scheduler_add_task grows it */
     bootstrap->prev = bootstrap;
     bootstrap->id = 0;
+    bootstrap->parent_id = 0; /* never exits, never collected -- harmless default */
+    bootstrap->exit_code = 0;
 
     current_task = bootstrap;
     scheduler_current_pml4 = bootstrap->pml4;

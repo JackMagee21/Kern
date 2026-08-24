@@ -21,6 +21,14 @@ default abs
 
 section .bss
 align 8
+; Milestone 18 (ADR 0018): global, not file-local -- sys_fork
+; (kernel/arch/x86_64/syscall.c) needs the user's RSP at the moment of
+; the syscall to build the child's synthetic resume trap frame (the
+; child's stack VA is identical to the parent's, since fork copies
+; every mapping 1:1 by VA -- only the physical frame differs), which
+; means C code needs read access to this value; syscall_get_user_rsp()
+; is the accessor.
+global saved_user_rsp
 saved_user_rsp: resq 1
 
 section .text

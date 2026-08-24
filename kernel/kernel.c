@@ -27,6 +27,9 @@
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289u
 
+extern const uint8_t fork_demo_image_start[]; /* kernel/sched/fork_demo_blob.asm: embedded build/kernel/user/fork_demo.elf */
+extern const uint8_t fork_demo_image_end[];
+
 /* Milestone 6 self-test: two kernel threads that never voluntarily
    yield, proving the scheduler forcibly preempts a task that never
    gives up the CPU on its own -- not just that cooperative switching
@@ -291,6 +294,20 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(process_b->pml4);
     console_write(" (different address spaces)\n");
 
+    /* Milestone 18 (ADR 0018): a THIRD orphan process (parent_id == 0,
+       same as process_a/process_b -- kernel_main itself never
+       scheduler_try_wait()s for anything) whose own job is to fork a
+       FOURTH process at runtime and prove fork/wait end to end
+       (kernel/user/fork_demo.asm). Deliberately a separate log line
+       from the "2 ring-3 processes" one above -- keeps that exact,
+       already-tested marker text unchanged rather than folding this
+       into it. */
+    task_t *fork_demo_process = task_create_user_image(fork_demo_image_start, fork_demo_image_end);
+    scheduler_add_task(fork_demo_process);
+    console_write("[OK] fork/wait demo process created, pid 0x");
+    console_write_hex(fork_demo_process->id);
+    console_write("\n");
+
     keyboard_init();
     mouse_init();
     pic_clear_mask(0);  /* IRQ0: timer */
@@ -355,15 +372,21 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        came back. A leak here would silently regress every future
        milestone that creates and exits processes repeatedly (e.g. a
        real shell running multiple programs) into slowly exhausting
-       physical memory. */
-    while (scheduler_reaped_count() < 2) {
+       physical memory. Milestone 18 (ADR 0018) raised the target from
+       2 to 4: frames_before_processes was captured before the
+       fork/wait demo process too (created above, alongside process_a/
+       process_b), and that process's own runtime-forked child is a
+       FIFTH task whose resources must also come back before this
+       baseline comparison is valid -- 2 hello processes + the fork
+       demo's own exit + its forked child's exit. */
+    while (scheduler_reaped_count() < 4) {
         __asm__ volatile("hlt");
     }
     uint64_t frames_after_reap = pmm_frames_free();
     if (frames_after_reap != frames_before_processes) {
-        panic("process lifecycle self-test failed: frames leaked after both processes exited");
+        panic("process lifecycle self-test failed: frames leaked after all processes exited");
     }
-    console_write("[OK] process lifecycle self-test passed, both ring-3 processes exited and were fully reaped (0x");
+    console_write("[OK] process lifecycle self-test passed, all ring-3 processes exited and were fully reaped (0x");
     console_write_hex(frames_after_reap);
     console_write(" frames free, matches pre-creation baseline)\n");
 

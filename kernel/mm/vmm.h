@@ -178,4 +178,27 @@ bool vmm_is_user_range(uint64_t addr, uint64_t length);
    the plumbing took effect. */
 bool vmm_page_is_executable_in(uint64_t pml4_phys, uint64_t virt_addr);
 
+/* Milestone 18 (ADR 0018, fork): called once per PRESENT leaf mapping
+   found while walking pml4_phys's process-private region (PML4 entries
+   1-510 -- the same range vmm_destroy_address_space() walks, excluding
+   the shared identity map [0] and kernel half [511]), with that page's
+   virtual address, physical frame, and its flags (WRITABLE/USER/NX/
+   OWNED only -- PRESENT and the address bits are masked out; the
+   caller decides what to do with them, e.g. re-applying them verbatim
+   to a new mapping). va is reconstructed assuming a LOWER-HALF
+   canonical address (PML4 index < 256, no sign-extension needed) --
+   true for every process-private region this kernel ever creates
+   (index 1, kernel/sched/task.c), not asserted/checked here since nothing
+   in this codebase ever uses a higher-half process-private index. */
+typedef void (*vmm_page_visitor_t)(uint64_t va, uint64_t phys, uint64_t flags, void *ctx);
+
+/* Walks every present leaf mapping in pml4_phys's process-private
+   region and calls visitor once per page, in ascending virtual-address
+   order (same nested PML4/PDPT/PD/PT traversal as
+   vmm_destroy_address_space(), read-only). Panics if it finds a huge
+   (2MiB/1GiB) page in that region, same defensive check
+   vmm_destroy_address_space() already makes -- nothing in this codebase
+   creates one there, so hitting one would mean a logic bug elsewhere. */
+void vmm_for_each_user_page(uint64_t pml4_phys, vmm_page_visitor_t visitor, void *ctx);
+
 #endif /* KERNEL_MM_VMM_H */

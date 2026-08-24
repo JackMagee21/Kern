@@ -17,7 +17,7 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 17 (2026-08-24)
+## State as of Milestone 18 (2026-08-24)
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -60,23 +60,34 @@ the design reasoning and any real bugs found along the way.
     (`user_demo.asm`, retired). Each process gets a fresh private copy
     of every segment (no shared/COW text pages — a deliberate,
     documented tradeoff, see ADR 0017).
+18. **`sys_fork`, non-blocking `sys_wait`, exit codes** — `task_fork()`
+    (`kernel/sched/task.c`) deep-copies a process's entire address
+    space (`vmm_for_each_user_page()`, new) into a genuinely
+    independent child, resuming it via a synthetic trap frame built
+    from the parent's in-flight syscall state. `sys_wait` is
+    deliberately non-blocking (this kernel's syscalls are still
+    non-preemptible with interrupts masked throughout, ADR 0007 — a
+    real blocking wait needs a scheduler primitive that doesn't exist
+    yet) — the caller polls, proven end to end by
+    `kernel/user/fork_demo.asm`. See ADR 0018.
 
-**Testing state:** 17 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+**Testing state:** 18 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Every milestone has its own dedicated smoke test; run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** eleven milestones
-(9-17) all followed the same pattern — implement, boot in QEMU for
+**A note on process discipline that held up well:** twelve milestones
+(9-18) all followed the same pattern — implement, boot in QEMU for
 real, fix what actually breaks, write the ADR describing what was
 tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15 and 17 all landed correctly on the
-first real boot; Milestone 9 (per-process address spaces) and Milestone
-16 (PS/2 mouse) each hit one genuine bug that needed real diagnosis (not
-guessing) to fix — both are documented in detail in their ADRs
-(0009, 0016) specifically so the diagnostic *method*, not just the
-fix, is preserved for next time something in this territory breaks.
+logical pieces. Milestones 10-15, 17, and 18 all landed correctly on
+the first real boot; Milestone 9 (per-process address spaces) and
+Milestone 16 (PS/2 mouse) each hit one genuine bug that needed real
+diagnosis (not guessing) to fix — both are documented in detail in
+their ADRs (0009, 0016) specifically so the diagnostic *method*, not
+just the fix, is preserved for next time something in this territory
+breaks.
 
 ## Explicitly flagged, NOT started — needs your decision
 
@@ -102,24 +113,31 @@ These don't touch a non-goal and were the natural next items on the
 "build this into an OS" list this session worked through one at a
 time:
 
-- **Process lifecycle maturity**: `fork`/`exec`-equivalent syscalls, a
-  parent/child relationship, `wait()`/exit-code reporting. Milestone
-  10 built exit + teardown but explicitly deferred all of this (every
-  process today is spawned directly by `kernel_main`, not by another
-  process). Milestone 17's ELF loader (`elf_load()`,
-  `kernel/mm/elf_loader.c`) is now the natural thing an `exec`-
-  equivalent syscall would call into — the loader itself doesn't care
-  who invokes it, only `task_create_user()` currently does, always with
-  the one embedded image.
+- **A `sys_exec`-equivalent syscall.** Milestone 18 gave a running
+  process the ability to fork; it still can't replace its own image
+  with a different one. `elf_load()` (`kernel/mm/elf_loader.c`,
+  Milestone 17) doesn't care who invokes it — the natural next step is
+  a syscall that tears down the CALLING process's current mappings
+  (`vmm_for_each_user_page()`, Milestone 18, could drive that walk) and
+  calls `elf_load()` again with a DIFFERENT embedded image, then
+  resumes at the new entry point. Would need at least a second
+  meaningfully-different embedded program to select between (right now
+  there are two, `hello.asm` and `fork_demo.asm`, but neither was
+  written with "being exec'd into" in mind).
 - **Remaining memory-maturity items**: VMAs (a real per-process memory
-  map instead of two hardcoded regions), demand paging / copy-on-write,
-  a general physical-memory direct-map (right now only the low 8MiB
-  identity window is directly writable for new page-table frames —
-  ADR 0004's known limitation, still true).
-- **Synchronization/IPC.** Nothing in this kernel has needed a lock
-  beyond `cli`/`sti` critical sections yet (single CPU, and the reaper/
-  scheduler interactions were narrow enough to reason about directly —
-  ADR 0010). Real IPC (pipes, shared memory, signals) would matter once
+  map instead of a few hardcoded regions), demand paging / copy-on-write
+  (Milestone 18's `sys_fork` is a full eager deep copy specifically
+  because this doesn't exist yet — see ADR 0018 for why building COW
+  wasn't attempted inline with fork itself), a general physical-memory
+  direct-map (right now only the low 8MiB identity window is directly
+  writable for new page-table/ELF-segment/fork-destination frames —
+  ADR 0004's known limitation, still true, and now depended on by three
+  subsystems instead of one).
+- **Synchronization/IPC — now with a concrete motivating case.**
+  Milestone 18's `sys_wait` is non-blocking specifically because no
+  blocking/sleep-queue scheduler primitive exists (ADR 0018) — a real
+  `wait()` needs exactly that, not just IPC in the abstract. Real IPC
+  (pipes, shared memory, signals) would additionally matter once
   there's more than one reason for two processes to talk to each other.
 - **Cursor/graphics.** Milestone 16 built the mouse *input* path with
   nothing to draw a cursor on. A framebuffer console (flagged as future

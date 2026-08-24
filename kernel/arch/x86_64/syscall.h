@@ -23,6 +23,8 @@ typedef struct __attribute__((packed)) {
 #define SYS_NOP   0
 #define SYS_WRITE 1
 #define SYS_EXIT  2
+#define SYS_FORK  3
+#define SYS_WAIT  4
 
 /* Programs STAR/LSTAR/SFMASK and sets EFER.SCE. Must run after
    gdt_init() (STAR encodes GDT selector offsets) and tss_init().
@@ -47,5 +49,15 @@ void syscall_dispatch(syscall_frame_t *frame);
    the same pattern as pit.c's tick_count / kernel/sched's demo task
    counters. */
 uint64_t syscall_get_count(void);
+
+/* Milestone 18 (ADR 0018): the calling process's user-mode RSP at the
+   moment of the CURRENTLY EXECUTING syscall (syscall_entry.asm's
+   saved_user_rsp -- RSP is unchanged by the SYSCALL instruction itself,
+   so this is exactly what the user program's stack pointer was). Only
+   meaningful from within syscall_dispatch() (or something it calls,
+   e.g. sys_fork's task_fork()) -- reading it any other time would just
+   return whichever process most recently made a syscall, not anything
+   meaningful. */
+uint64_t syscall_get_user_rsp(void);
 
 #endif /* KERNEL_ARCH_X86_64_SYSCALL_H */

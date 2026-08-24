@@ -6,6 +6,7 @@
 #include "../../drivers/console.h"
 #include "../../mm/vmm.h"
 #include "../../sched/scheduler.h"
+#include "../../sched/task.h"
 
 /*
  * MSR numbers and the STAR encoding verified against Linux's own
@@ -33,12 +34,18 @@
 #define SFMASK_VALUE 0x300u
 
 extern void syscall_entry(void); /* syscall_entry.asm */
+extern uint64_t saved_user_rsp;  /* syscall_entry.asm -- Milestone 18, see syscall_get_user_rsp() */
 
 /* Not static: syscall_entry.asm references this symbol directly
    (`extern syscall_kernel_rsp`) to find the stack to switch to. */
 uint64_t syscall_kernel_rsp;
 
 static uint64_t syscall_count;
+
+uint64_t syscall_get_user_rsp(void)
+{
+    return saved_user_rsp;
+}
 
 void syscall_init(void)
 {
@@ -73,6 +80,57 @@ static void sys_write(syscall_frame_t *frame)
     frame->rax = len;
 }
 
+/* Milestone 18 (ADR 0018): forks the CALLING process (task_fork() does
+   the actual work -- new address space, deep-copied pages, a synthetic
+   child trap frame built from THIS frame plus the user RSP at the
+   moment of this exact syscall). Returns the child's task id to the
+   PARENT (this frame's rax, the normal syscall-return-value path); the
+   child's own rax is baked into its synthetic frame as 0 by
+   task_fork() and is never touched here -- the child doesn't resume
+   through syscall_dispatch/sysretq at all, it resumes fresh via the
+   scheduler's normal iretq path, same as any newly created task. */
+static void sys_fork(syscall_frame_t *frame)
+{
+    task_t *parent = scheduler_current_task();
+    task_t *child = task_fork(parent, frame, syscall_get_user_rsp());
+    scheduler_add_task(child);
+    frame->rax = child->id;
+}
+
+/* Milestone 18 (ADR 0018): NON-blocking. Syscalls in this kernel are
+   non-preemptible and run with interrupts masked the whole time
+   (SFMASK, syscall.c's syscall_init()) -- a genuinely BLOCKING wait()
+   would need to sleep with interrupts enabled and a way for something
+   else to wake this task back up, neither of which this kernel has yet
+   (no blocking/sleep-queue primitive exists at all -- flagged future
+   work, ADR 0018's Known Limitations). Instead: rdi = target pid (0 =
+   any child of the caller), rsi = optional user pointer to write the
+   exit code into (0 = caller doesn't want it, skip the write). Returns
+   the reaped child's pid in rax, or 0 if no exited-but-uncollected
+   child matches yet -- the caller is expected to poll (see
+   kernel/user/fork_demo.asm's wait loop), the same "hlt/spin until a
+   counter advances" pattern this kernel already uses everywhere else
+   for "wait for an async event", just done from ring 3 via repeated
+   syscalls instead of from kernel_main directly. */
+static void sys_wait(syscall_frame_t *frame)
+{
+    uint64_t target_pid = frame->rdi;
+    uint64_t out_ptr = frame->rsi;
+
+    uint64_t exit_code = 0;
+    uint32_t reaped_pid = scheduler_try_wait(scheduler_current_task()->id, (uint32_t)target_pid, &exit_code);
+
+    if (reaped_pid != 0 && out_ptr != 0) {
+        if (!vmm_is_user_range(out_ptr, sizeof(uint64_t))) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        *(uint64_t *)(uintptr_t)out_ptr = exit_code;
+    }
+
+    frame->rax = reaped_pid;
+}
+
 void syscall_dispatch(syscall_frame_t *frame)
 {
     syscall_count++;
@@ -85,7 +143,13 @@ void syscall_dispatch(syscall_frame_t *frame)
         sys_write(frame);
         break;
     case SYS_EXIT:
-        scheduler_exit_current(); /* noreturn -- never falls through to sysretq */
+        scheduler_exit_current(frame->rdi); /* noreturn -- never falls through to sysretq; rdi = exit code */
+        break;
+    case SYS_FORK:
+        sys_fork(frame);
+        break;
+    case SYS_WAIT:
+        sys_wait(frame);
         break;
     default:
         frame->rax = (uint64_t)-1;

@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "../arch/x86_64/syscall.h" /* syscall_frame_t -- task_fork()'s parent_frame parameter, Milestone 18 */
+
 /* rsp points at a saved context (trap_frame_t for a kernel task,
    syscall/interrupt-preempted or synthetic either way) -- either a
    synthetic one a task_create* function built (never yet run) or a
@@ -46,7 +48,20 @@
    field just for the zombie chain too). See kernel/sched/scheduler.c
    for why actually freeing a zombie's resources (kernel_stack_base,
    pml4, the task_t itself) has to be deferred to a separate reaper
-   task rather than happening as soon as a task exits. */
+   task rather than happening as soon as a task exits.
+
+   parent_id/exit_code (Milestone 18, ADR 0018, fork/wait): parent_id
+   is 0 for any task NOT created via task_fork() (every kernel thread,
+   and every task_create_user_image() process spawned directly by
+   kernel_main) -- 0 is a safe "no parent" sentinel since real task ids
+   start at 1 (id 0 is reserved for the bootstrap task, which never
+   forks). A parent_id != 0 task's task_t is NOT freed immediately when
+   the reaper reclaims its resources -- it's held (this field plus
+   exit_code plus id) on a separate collected-but-uncollected chain
+   (scheduler.c's collected_head) until scheduler_try_wait() is called
+   with a matching caller_id/target_pid. exit_code is set by
+   scheduler_exit_current() right before a task becomes TASK_ZOMBIE;
+   meaningless before that. */
 typedef enum {
     TASK_READY,
     TASK_ZOMBIE,
@@ -61,6 +76,8 @@ typedef struct task {
     struct task *next;
     struct task *prev;
     uint32_t id;
+    uint32_t parent_id;
+    uint64_t exit_code;
 } task_t;
 
 /* 16KiB per task, fixed. CLAUDE.md: know the stack size for every
@@ -89,22 +106,56 @@ task_t *task_create(void (*entry)(void));
 void task_free_kernel_stack(uint64_t base, uint64_t size);
 
 /* Builds one ring-3 process, in its OWN address space
-   (vmm_create_address_space()) -- callable more than once; each call is
-   a genuinely independent process, not a second handle onto the same
-   one. Since Milestone 17 (ADR 0017), the process's code/data/bss come
-   from parsing and mapping a REAL embedded ELF64 executable
-   (kernel/mm/elf_loader.c, kernel/user/hello.asm) rather than Milestone
-   7-16's single hand-written, position-independent blob (see ADR 0007
-   for why a normal compiled C function couldn't be used directly:
-   mcmodel=kernel code lives inside the kernel's own supervisor-only
-   2MiB pages) mapped read-only and shared across every process. Every
-   PT_LOAD segment now gets its own private, freshly allocated frame(s)
-   per process instead -- only the stack was ever private before. Also
-   maps a separate, NOT user-accessible kernel-mode stack (for TSS.RSP0
-   / syscall entry -- see task_t's pml4/kernel_stack_top doc comment).
-   Panics on any allocation/mapping failure, or if the embedded ELF
-   image itself fails validation (would mean the build is broken, not
-   bad runtime input). */
+   (vmm_create_address_space()), loading and mapping image_start..
+   image_end as a real ELF64 executable (kernel/mm/elf_loader.c) --
+   callable more than once, with any embedded image, each call a
+   genuinely independent process. parent_id is set to 0 (orphan --
+   nothing will ever scheduler_try_wait() for this process; matches
+   every call kernel_main makes directly). Every PT_LOAD segment gets
+   its own private, freshly allocated frame(s) (see ADR 0017), with
+   permissions derived from the segment's own p_flags. Also maps a
+   separate, NOT user-accessible kernel-mode stack (for TSS.RSP0 /
+   syscall entry -- see task_t's pml4/kernel_stack_top doc comment).
+   Panics on any allocation/mapping failure, or if the image fails ELF64
+   validation (would mean the build embedding it is broken, not bad
+   runtime input). */
+task_t *task_create_user_image(const uint8_t *image_start, const uint8_t *image_end);
+
+/* Thin wrapper: task_create_user_image() with the embedded
+   kernel/user/hello.asm image (kernel/sched/user_elf_blob.asm) --
+   preserved as its own name since this is what every pre-Milestone-18
+   call site (kernel_main's two "hello" processes) already uses, and
+   what most of this codebase's own doc comments still refer to by this
+   name. */
 task_t *task_create_user(void);
+
+/* Milestone 18 (ADR 0018): forks `parent` -- a ring-3 process that is
+   CURRENTLY EXECUTING a syscall (this must only ever be called from
+   sys_fork, kernel/arch/x86_64/syscall.c, while `parent` is the
+   scheduler's current_task and `parent_frame` is that exact syscall's
+   saved GPRs). Builds a brand new address space
+   (vmm_create_address_space()) and deep-copies every present,
+   process-private page from parent->pml4 into it byte-for-byte
+   (vmm_for_each_user_page() + a fresh pmm_alloc_frame() per page --
+   NOT copy-on-write; see ADR 0018 for why) at the SAME virtual
+   addresses, so the child's memory is a genuine snapshot of the
+   parent's at this exact instant. The child's initial resume context is
+   a SYNTHETIC trap_frame_t built from parent_frame's GPRs (same
+   register values the parent will resume with) plus parent_user_rsp
+   (the parent's user-mode RSP at the moment of this syscall --
+   syscall_get_user_rsp(), NOT contained in syscall_frame_t itself) and
+   parent_frame->rcx/r11 (SYSCALL's saved user RIP/RFLAGS) -- EXCEPT
+   rax, deliberately forced to 0 (fork()'s "this is the child" return
+   value; the PARENT's own rax, this task's actual return value, is set
+   separately by sys_fork() using the normal syscall-return path).
+   Returns the child with a fresh id and parent_id == parent->id, ready
+   for the caller (sys_fork) to scheduler_add_task() -- NOT added to the
+   ready queue by this function itself, matching every other
+   task_create*() function's contract. Panics on any allocation/mapping
+   failure -- fork failing wasn't an input-validation case this
+   milestone needed to handle gracefully (nothing here can fail from
+   bad user input; it only reflects the ALREADY-VALIDATED parent's own
+   memory back into a new table). */
+task_t *task_fork(task_t *parent, const syscall_frame_t *parent_frame, uint64_t parent_user_rsp);
 
 #endif /* KERNEL_SCHED_TASK_H */

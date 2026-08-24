@@ -362,6 +362,55 @@ bool vmm_page_is_executable_in(uint64_t pml4_phys, uint64_t virt_addr)
     return !(pte & VMM_FLAG_NX);
 }
 
+void vmm_for_each_user_page(uint64_t pml4_phys, vmm_page_visitor_t visitor, void *ctx)
+{
+    uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_phys;
+
+    for (uint64_t i = 0; i < ENTRIES_PER_TABLE; i++) {
+        if (i == 0 || i == 511) {
+            continue; /* shared identity map / kernel half -- not process-private */
+        }
+        uint64_t pml4e = pml4[i];
+        if (!(pml4e & PTE_PRESENT)) {
+            continue;
+        }
+        uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4e & PTE_ADDR_MASK);
+
+        for (uint64_t j = 0; j < ENTRIES_PER_TABLE; j++) {
+            uint64_t pdpte = pdpt[j];
+            if (!(pdpte & PTE_PRESENT)) {
+                continue;
+            }
+            if (pdpte & PTE_PS) {
+                panic("vmm_for_each_user_page: unexpected 1GiB page in a process-private mapping");
+            }
+            uint64_t *pd = (uint64_t *)(uintptr_t)(pdpte & PTE_ADDR_MASK);
+
+            for (uint64_t k = 0; k < ENTRIES_PER_TABLE; k++) {
+                uint64_t pde = pd[k];
+                if (!(pde & PTE_PRESENT)) {
+                    continue;
+                }
+                if (pde & PTE_PS) {
+                    panic("vmm_for_each_user_page: unexpected 2MiB page in a process-private mapping");
+                }
+                uint64_t *pt = (uint64_t *)(uintptr_t)(pde & PTE_ADDR_MASK);
+
+                for (uint64_t l = 0; l < ENTRIES_PER_TABLE; l++) {
+                    uint64_t pte = pt[l];
+                    if (!(pte & PTE_PRESENT)) {
+                        continue;
+                    }
+                    uint64_t va = (i << 39) | (j << 30) | (k << 21) | (l << 12);
+                    uint64_t phys = pte & PTE_ADDR_MASK;
+                    uint64_t flags = pte & (VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NX | VMM_FLAG_OWNED);
+                    visitor(va, phys, flags, ctx);
+                }
+            }
+        }
+    }
+}
+
 bool vmm_is_user_range(uint64_t addr, uint64_t length)
 {
     if (length == 0) {

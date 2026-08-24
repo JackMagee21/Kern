@@ -102,6 +102,8 @@ task_t *task_create(void (*entry)(void))
     task->next = NULL;
     task->prev = NULL;
     task->id = next_task_id++;
+    task->parent_id = 0; /* kernel threads never exit and are never forked -- harmless default */
+    task->exit_code = 0;
     return task;
 }
 
@@ -121,31 +123,31 @@ task_t *task_create(void (*entry)(void))
 extern const uint8_t user_elf_image_start[]; /* kernel/sched/user_elf_blob.asm: embedded build/kernel/user/hello.elf */
 extern const uint8_t user_elf_image_end[];
 
-task_t *task_create_user(void)
+task_t *task_create_user_image(const uint8_t *image_start, const uint8_t *image_end)
 {
     task_t *task = (task_t *)kmalloc(sizeof(task_t));
     if (task == NULL) {
-        panic("task_create_user: kmalloc failed for task_t");
+        panic("task_create_user_image: kmalloc failed for task_t");
     }
 
     uint64_t pml4 = vmm_create_address_space();
 
-    /* Milestone 17 (ADR 0017): parse and map the real compiled ELF64
-       executable (kernel/user/hello.asm + user.ld) instead of Milestone
-       7-16's single hand-mapped, shared-read-only demo code page.
-       Every PT_LOAD segment gets its OWN freshly allocated frame(s) in
-       THIS process's address space (VMM_FLAG_OWNED, so exit correctly
-       frees them -- ADR 0010), with per-segment W^X permissions derived
-       from the ELF's own p_flags rather than one fixed policy for the
-       whole program. elf_load() only returns false for a malformed
-       image -- the embedded blob is built by this same repo's own
-       Makefile/user.ld, so a validation failure here would mean the
-       build itself is broken, not bad runtime input; panic rather than
-       leave a half-built process behind. */
-    uint64_t image_size = (uint64_t)(uintptr_t)user_elf_image_end - (uint64_t)(uintptr_t)user_elf_image_start;
+    /* Milestone 17 (ADR 0017): parse and map a real compiled ELF64
+       executable instead of Milestone 7-16's single hand-mapped,
+       shared-read-only demo code page. Every PT_LOAD segment gets its
+       OWN freshly allocated frame(s) in THIS process's address space
+       (VMM_FLAG_OWNED, so exit correctly frees them -- ADR 0010), with
+       per-segment W^X permissions derived from the ELF's own p_flags
+       rather than one fixed policy for the whole program. elf_load()
+       only returns false for a malformed image -- every image this
+       repo embeds is built by its own Makefile/user.ld, so a
+       validation failure here would mean the build itself is broken,
+       not bad runtime input; panic rather than leave a half-built
+       process behind. */
+    uint64_t image_size = (uint64_t)(uintptr_t)image_end - (uint64_t)(uintptr_t)image_start;
     uint64_t entry_point;
-    if (!elf_load(pml4, user_elf_image_start, image_size, &entry_point)) {
-        panic("task_create_user: embedded user ELF image failed validation");
+    if (!elf_load(pml4, image_start, image_size, &entry_point)) {
+        panic("task_create_user_image: embedded user ELF image failed validation");
     }
 
     /* User-accessible stack: fresh physical frames per process (not
@@ -210,5 +212,94 @@ task_t *task_create_user(void)
     task->next = NULL;
     task->prev = NULL;
     task->id = next_task_id++;
+    task->parent_id = 0; /* spawned directly by kernel_main -- orphan, nothing will ever wait() for it */
+    task->exit_code = 0;
     return task;
+}
+
+task_t *task_create_user(void)
+{
+    return task_create_user_image(user_elf_image_start, user_elf_image_end);
+}
+
+/* Milestone 18 (ADR 0018): forking a process's address space. Runs
+   under the PARENT's own CR3 (task_fork() is only ever called from
+   sys_fork, itself only ever reached mid-syscall -- SYSCALL never
+   switches CR3, so the parent's mappings are directly readable via
+   ordinary virtual addresses right now, no special access trick
+   needed for the SOURCE side, unlike the ELF loader's need to write a
+   brand new, not-yet-mapped-anywhere DESTINATION frame directly via
+   its physical address). */
+typedef struct {
+    uint64_t dest_pml4;
+} fork_copy_ctx_t;
+
+static void fork_copy_page(uint64_t va, uint64_t phys, uint64_t flags, void *ctx_)
+{
+    (void)phys; /* the source frame's physical address is never dereferenced -- see comment above: read via va instead */
+    fork_copy_ctx_t *ctx = (fork_copy_ctx_t *)ctx_;
+
+    uint64_t new_frame = pmm_alloc_frame();
+    if (new_frame == 0 || new_frame >= VMM_IDENTITY_WINDOW_LIMIT) {
+        panic("task_fork: pmm exhausted or destination frame outside identity window");
+    }
+
+    uint8_t *dst = (uint8_t *)(uintptr_t)new_frame;
+    const uint8_t *src = (const uint8_t *)(uintptr_t)va;
+    for (uint64_t b = 0; b < PMM_FRAME_SIZE; b++) {
+        dst[b] = src[b];
+    }
+
+    if (!vmm_map_page_in(ctx->dest_pml4, va, new_frame, flags)) {
+        panic("task_fork: vmm_map_page_in failed while copying the parent's address space");
+    }
+}
+
+task_t *task_fork(task_t *parent, const syscall_frame_t *parent_frame, uint64_t parent_user_rsp)
+{
+    task_t *child = (task_t *)kmalloc(sizeof(task_t));
+    if (child == NULL) {
+        panic("task_fork: kmalloc failed for task_t");
+    }
+
+    uint64_t child_pml4 = vmm_create_address_space();
+
+    fork_copy_ctx_t ctx = { .dest_pml4 = child_pml4 };
+    vmm_for_each_user_page(parent->pml4, fork_copy_page, &ctx);
+
+    uint64_t kernel_stack_base;
+    uint64_t kernel_stack_top = alloc_kernel_stack(USER_KERNEL_STACK_SIZE, &kernel_stack_base);
+
+    /* Every GPR copied from the parent's saved syscall state EXCEPT
+       rax, forced to 0 -- the one field that must NOT match the
+       parent's (fork()'s "you are the child" signal). rip/rflags come
+       from rcx/r11, exactly as a normal SYSRET would reconstruct them
+       (see syscall_frame_t's doc comment) -- this is what lets the
+       child resume at the SAME point in the program right after the
+       `syscall` instruction that forked it, just like the parent will. */
+    trap_frame_t *frame = (trap_frame_t *)(kernel_stack_top - sizeof(trap_frame_t));
+    *frame = (trap_frame_t){
+        .r15 = parent_frame->r15, .r14 = parent_frame->r14, .r13 = parent_frame->r13, .r12 = parent_frame->r12,
+        .r11 = parent_frame->r11, .r10 = parent_frame->r10, .r9 = parent_frame->r9, .r8 = parent_frame->r8,
+        .rbp = parent_frame->rbp, .rdi = parent_frame->rdi, .rsi = parent_frame->rsi, .rdx = parent_frame->rdx,
+        .rcx = parent_frame->rcx, .rbx = parent_frame->rbx,
+        .rax = 0,
+        .rip = parent_frame->rcx,
+        .cs = USER_CODE_SELECTOR | 3,
+        .rflags = parent_frame->r11,
+        .rsp = parent_user_rsp,
+        .ss = USER_DATA_SELECTOR | 3,
+    };
+
+    child->rsp = (uint64_t)frame;
+    child->kernel_stack_top = kernel_stack_top;
+    child->kernel_stack_base = kernel_stack_base;
+    child->pml4 = child_pml4;
+    child->state = TASK_READY;
+    child->next = NULL;
+    child->prev = NULL;
+    child->id = next_task_id++;
+    child->parent_id = parent->id;
+    child->exit_code = 0;
+    return child;
 }
