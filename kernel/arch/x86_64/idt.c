@@ -67,6 +67,30 @@ static void (*const isr_stub[IDT_NUM_EXCEPTION_VECTORS])(void) = {
     isr24, isr25, isr26, isr27, isr28, isr29, isr30, isr31,
 };
 
+/* One stub per remapped IRQ vector, defined in irq.asm. Same
+   individually-declared-not-computed discipline as isr_stub above. */
+extern void irq0(void);
+extern void irq1(void);
+extern void irq2(void);
+extern void irq3(void);
+extern void irq4(void);
+extern void irq5(void);
+extern void irq6(void);
+extern void irq7(void);
+extern void irq8(void);
+extern void irq9(void);
+extern void irq10(void);
+extern void irq11(void);
+extern void irq12(void);
+extern void irq13(void);
+extern void irq14(void);
+extern void irq15(void);
+
+static void (*const irq_stub[IDT_NUM_IRQ_VECTORS])(void) = {
+    irq0, irq1, irq2,  irq3,  irq4,  irq5,  irq6,  irq7,
+    irq8, irq9, irq10, irq11, irq12, irq13, irq14, irq15,
+};
+
 static void idt_set_gate(int vector, void (*handler)(void), uint16_t selector, uint8_t ist, uint8_t type_attr)
 {
     uint64_t addr = (uint64_t)handler;
@@ -90,6 +114,10 @@ void idt_init(void)
 
     for (int vector = 0; vector < IDT_NUM_EXCEPTION_VECTORS; vector++) {
         idt_set_gate(vector, isr_stub[vector], KERNEL_CODE_SELECTOR, 0, present_dpl0_interrupt_gate);
+    }
+
+    for (int line = 0; line < IDT_NUM_IRQ_VECTORS; line++) {
+        idt_set_gate(IDT_IRQ_VECTOR_BASE + line, irq_stub[line], KERNEL_CODE_SELECTOR, 0, present_dpl0_interrupt_gate);
     }
 
     idt_ptr.limit = sizeof(idt) - 1;

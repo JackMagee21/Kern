@@ -40,4 +40,11 @@ typedef struct __attribute__((packed)) trap_frame {
    isr_common_stub. */
 void isr_handler(trap_frame_t *frame);
 
+/* Defined in irq_dispatch.c, called from kernel/arch/x86_64/irq.asm's
+   irq_common_stub (Milestone 5). Both share common_stub.inc's save/
+   align/restore sequence, so both take the identical trap_frame_t
+   pointer -- .vector is the literal IDT vector (32-47 for IRQs), not
+   the 0-15 IRQ line number. */
+void irq_handler(trap_frame_t *frame);
+
 #endif /* KERNEL_ARCH_X86_64_TRAP_FRAME_H */
