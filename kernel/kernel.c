@@ -168,8 +168,24 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        context; the demo tasks join the round-robin before interrupts
        are enabled. */
     scheduler_init();
-    scheduler_add_task(task_create(demo_task_a));
+    task_t *task_a = task_create(demo_task_a);
+    scheduler_add_task(task_a);
     scheduler_add_task(task_create(demo_task_b));
+
+    /* Milestone 12 (ADR 0012) self-test: task_a's kernel-mode stack
+       (kernel_stack_base) is one of alloc_kernel_stack()'s dedicated,
+       guard-paged VA slots (kernel/sched/task.c) -- confirm the page
+       immediately below it is genuinely unmapped, not just that
+       nothing has crashed yet. Checking real page-table state, same
+       reasoning as the NX self-test above: there's no exception-
+       recovery mechanism yet to safely trigger a live overflow and
+       watch it fault. */
+    uint64_t guard_page = task_a->kernel_stack_base - PMM_FRAME_SIZE;
+    uint64_t unused_phys;
+    if (vmm_translate(guard_page, &unused_phys)) {
+        panic("guard page self-test failed: kernel stack's guard page is mapped");
+    }
+    console_write("[OK] guard page self-test passed (kernel stack guard page is unmapped)\n");
 
     /* Milestone 10 (ADR 0010) self-test setup: captured BEFORE either
        process exists, so that once both have exited and been fully
