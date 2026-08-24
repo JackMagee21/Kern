@@ -297,9 +297,71 @@ doesn't work on UEFI-only boot without CSM (no framebuffer console
 yet); keyboard has no Caps Lock/Ctrl/Alt/function-key/numpad support;
 shell has no scripting, variables, or piping.
 
-## 9. FS, SMP, and whatever's learned by then (sequence TBD)
+## 9. Per-process address spaces — DONE
+First step of the "build this into a real OS" inventory worked through
+with the user after Milestone 8 (process model, storage/FS, drivers,
+memory maturity, synchronization/IPC) — taken one step at a time, per
+the user's explicit instruction, starting with this one since everything
+else on that list depends on genuine process isolation existing first.
+**Proves:** two ring-3 processes get independent top-level page tables
+(not a shared address space, as every task through Milestone 8 had) and
+both still work correctly — including making validated syscalls —
+without either being able to see or corrupt the other's memory.
+**Deliverables:**
+- `kernel/mm/vmm.c/.h`: `vmm_map_page_in(pml4_phys, ...)` (map into an
+  explicit PML4, not just the currently-active one), `vmm_current_pml4()`,
+  `vmm_create_address_space()` (allocates a fresh PML4, shares the
+  kernel-half entry `PML4[511]` and the identity-map entry `PML4[0]` by
+  reference with the caller's own table). `vmm_map_page()` is now defined
+  in terms of `vmm_map_page_in()`.
+- `kernel/arch/x86_64/common_stub.inc`: the scheduler's `CR3` reload
+  moved into assembly, placed after `RSP` has already switched to the
+  incoming task's own stack — doing this in C, before the stack switch,
+  was the more serious of the two real bugs this milestone found (see
+  ADR 0009).
+- `kernel/sched/scheduler.c/.h`: `scheduler_current_pml4`/
+  `scheduler_target_pml4` globals the assembly above reads/writes;
+  `timer_tick_handler` just records the target, doesn't switch `CR3`
+  itself anymore.
+- `kernel/sched/task.h/.c`: `task_t` gained a `pml4` field.
+  `task_create()` (kernel threads) records the kernel's own existing
+  space; `task_create_user()` now calls `vmm_create_address_space()` and
+  maps the demo program's code (shared read-only across every process)
+  and a private stack into it. User-space code/stack relocated from
+  `0x400000`/PML4 index 0 (Milestone 7) to `0x8000400000`/PML4 index 1,
+  since index 0 is now committed to the shared identity map.
+- `kernel/kernel.c`: creates two ring-3 processes instead of one,
+  printing both their `PML4` physical addresses.
+**Verification:** `make run` boots and prints, after all Milestones 1-8
+markers unchanged: `[OK] process A pml4: 0x23b000, process B pml4:
+0x244000 (different address spaces)` then **two** independent `[OK]
+hello from ring 3 via syscall` lines, then all self-tests passing with
+roughly double Milestone 7's syscall count. `tests/qemu/
+test_process_isolation_selftest.sh` (new) asserts the two `PML4`
+addresses actually differ and the hello message appears exactly twice —
+not just "both ran." Two earlier smoke tests needed stale marker text
+updated (2 processes instead of 1), not behavior fixes. All eight
+earlier milestones' smoke tests and all three host tests re-verified
+passing. The first two real boot attempts actually triple-faulted/
+garbled respectively before the fixes — both root-caused via
+`-d int,cpu_reset` traces and register-state reasoning, not guessed —
+see ADR 0009's Verification section for the full diagnostic trail.
+**Design record:** `docs/adr/0009-per-process-address-spaces.md`.
+**Known limitation (accepted for this milestone only):** still no
+ELF loader (the one demo program is embedded at link time, not loaded
+from a filesystem), no `sys_exit`/process teardown, no `fork`/`exec`, no
+demand paging or copy-on-write, no per-process resource limits. Revisit
+alongside the ELF loader and process lifecycle work next.
 
-Milestone 9 is intentionally left as a one-line placeholder here — full
+## 10. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 10 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
-against assumptions already-implemented milestones might overturn.
+against assumptions already-implemented milestones might overturn. Next
+candidates from the post-Milestone-8 "build this into an OS" inventory:
+ELF loader + process lifecycle (`sys_exit`, `fork`/`exec`), a disk driver
++ real filesystem, PCI enumeration, graphics/mouse/RTC/shutdown drivers,
+memory maturity (VMAs, demand paging/COW, NX, guard pages, a general
+physical direct-map), and synchronization/IPC — plus explicit SMP/
+networking non-goal decisions still needing the user's call.
