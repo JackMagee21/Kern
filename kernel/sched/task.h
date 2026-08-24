@@ -27,10 +27,15 @@
    vmm_create_address_space(). The scheduler reloads CR3 from this
    field on every switch, but only when it actually changes.
 
-   kernel_stack_base (process lifecycle, ADR 0010): the pointer
-   kmalloc() actually returned for this task's kernel-mode stack --
-   kernel_stack_top alone isn't enough to kfree() it correctly, since
-   it points at the far END of the allocation, not its start.
+   kernel_stack_base (process lifecycle, ADR 0010; guard pages, ADR
+   0012): the virtual address of the BOTTOM of this task's kernel-mode
+   stack (kernel_stack_top points at the far END of the allocation, not
+   its start) -- task_free_kernel_stack(kernel_stack_base,
+   kernel_stack_top - kernel_stack_base) is how the reaper actually
+   frees it. Not a kmalloc() pointer: since ADR 0012, every kernel-mode
+   stack is its own dedicated, page-mapped VA region with a guard page
+   below it (kernel/sched/task.c's alloc_kernel_stack()), not heap
+   memory.
 
    state/next/prev (process lifecycle, ADR 0010): a task is either
    TASK_READY, live in the scheduler's doubly-linked circular ready
@@ -63,14 +68,25 @@ typedef struct task {
    single fixed size for all of them is enough for now. */
 #define TASK_STACK_SIZE (16u * 1024u)
 
-/* Allocates a kernel-mode stack (via kmalloc) and builds a synthetic
-   trap frame on it so it can be resumed through the exact same iretq
-   path a real interrupt uses (common_stub.inc / scheduler.c) the first
-   time the scheduler switches to it. Runs at ring 0, same address
-   space as the kernel. entry must never return -- there is nowhere to
-   return to (no process exit path exists yet). Panics if the heap
-   can't satisfy the allocation. */
+/* Allocates a dedicated, guard-paged kernel-mode stack (ADR 0012) and
+   builds a synthetic trap frame on it so it can be resumed through the
+   exact same iretq path a real interrupt uses (common_stub.inc /
+   scheduler.c) the first time the scheduler switches to it. Runs at
+   ring 0, same address space as the kernel. entry must never return --
+   nothing calls sys_exit-equivalent teardown for a kernel thread; only
+   ring-3 processes (task_create_user()) currently ever exit. Panics on
+   any allocation/mapping failure. */
 task_t *task_create(void (*entry)(void));
+
+/* Frees a kernel-mode stack allocated by task_create()/
+   task_create_user() (base/size = task_t::kernel_stack_base /
+   kernel_stack_top - kernel_stack_base): looks up and pmm_free_frame()s
+   every mapped frame in [base, base+size), then unmaps each page. The
+   guard page below is never mapped in the first place, so there's
+   nothing to free there. Only ever called by the reaper
+   (kernel/sched/scheduler.c), once a task is safely no longer using
+   its own stack -- see ADR 0010. */
+void task_free_kernel_stack(uint64_t base, uint64_t size);
 
 /* Builds one ring-3 demo process, in its OWN address space
    (vmm_create_address_space()) -- callable more than once; each call

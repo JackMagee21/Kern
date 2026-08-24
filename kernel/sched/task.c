@@ -10,19 +10,76 @@
 
 static uint32_t next_task_id = 1; /* 0 is reserved for the bootstrap task (scheduler.c) */
 
+/* Every task's kernel-mode stack (a kernel thread's whole stack via
+   task_create(), or a ring-3 process's separate kernel-mode stack via
+   task_create_user()) gets its own dedicated, page-mapped VA slot in
+   this region, preceded by one deliberately-unmapped guard page -- a
+   stack overflow growing downward now hits that unmapped page and
+   takes an immediate #PF instead of silently corrupting whatever
+   kmalloc'd heap object happened to sit right below it (kernel stacks
+   used to come straight from kmalloc(), packed with no gap at all
+   between allocations -- a real, if latent, risk this closes off).
+   PML4[511]:PDPT[509] -- distinct from the kernel image (PDPT[510],
+   boot.asm) and the kernel heap (PDPT[511], heap.c); verified via
+   python3, the same discipline as every other PML4/PDPT index in this
+   codebase (see ADR 0012).
+
+   VA slots are handed out by a simple monotonic bump allocator and are
+   NEVER reclaimed/reused even after a task is reaped -- the same
+   "simple now, revisit only if actually exhausted" scope boundary
+   heap_init()'s fixed-size region already accepted (ADR 0004); a 1GiB
+   region divided into ~20KiB slots is nowhere near exhausted by
+   anything this kernel creates. */
+#define KERNEL_STACK_REGION_VIRT_BASE 0xFFFFFFFF40000000ULL
+#define KERNEL_STACK_GUARD_SIZE       PMM_FRAME_SIZE
+
+static uint64_t next_kernel_stack_slot = KERNEL_STACK_REGION_VIRT_BASE;
+
+/* Allocates `size` (a multiple of PMM_FRAME_SIZE) bytes of kernel-mode
+   stack, mapped VMM_FLAG_WRITABLE | VMM_FLAG_NX (data, never code --
+   same W^X reasoning as the kernel heap, ADR 0011). Returns the
+   stack's top (matches task_t::kernel_stack_top) and sets *out_base to
+   its bottom (matches task_t::kernel_stack_base). Panics on any
+   allocation/mapping failure. */
+static uint64_t alloc_kernel_stack(uint64_t size, uint64_t *out_base)
+{
+    uint64_t base_va = next_kernel_stack_slot + KERNEL_STACK_GUARD_SIZE;
+    next_kernel_stack_slot = base_va + size;
+
+    for (uint64_t off = 0; off < size; off += PMM_FRAME_SIZE) {
+        uint64_t frame = pmm_alloc_frame();
+        if (frame == 0) {
+            panic("alloc_kernel_stack: pmm exhausted");
+        }
+        if (!vmm_map_page(base_va + off, frame, VMM_FLAG_WRITABLE | VMM_FLAG_NX)) {
+            panic("alloc_kernel_stack: vmm_map_page failed");
+        }
+    }
+
+    *out_base = base_va;
+    return base_va + size;
+}
+
+void task_free_kernel_stack(uint64_t base, uint64_t size)
+{
+    for (uint64_t off = 0; off < size; off += PMM_FRAME_SIZE) {
+        uint64_t phys;
+        if (vmm_translate(base + off, &phys)) {
+            vmm_unmap_page(base + off);
+            pmm_free_frame(phys);
+        }
+    }
+}
+
 task_t *task_create(void (*entry)(void))
 {
     task_t *task = (task_t *)kmalloc(sizeof(task_t));
-    uint8_t *stack = (uint8_t *)kmalloc(TASK_STACK_SIZE);
-    if (task == NULL || stack == NULL) {
+    if (task == NULL) {
         panic("task_create: kmalloc failed");
     }
 
-    /* kmalloc's minimum alignment is 16 bytes (libk/heap_alloc.c) and
-       TASK_STACK_SIZE is a multiple of 16, so stack_top is already
-       16-byte aligned -- the same convention boot.asm's own stack
-       relies on before its `call kernel_main`. */
-    uint64_t stack_top = (uint64_t)(stack + TASK_STACK_SIZE);
+    uint64_t stack_base;
+    uint64_t stack_top = alloc_kernel_stack(TASK_STACK_SIZE, &stack_base);
 
     trap_frame_t *frame = (trap_frame_t *)(stack_top - sizeof(trap_frame_t));
     /* Designated initializer zeroes every field not listed -- all GPRs
@@ -38,7 +95,7 @@ task_t *task_create(void (*entry)(void))
 
     task->rsp = (uint64_t)frame;
     task->kernel_stack_top = stack_top; /* never actually consulted for a ring-0 task; harmless default */
-    task->kernel_stack_base = (uint64_t)(uintptr_t)stack;
+    task->kernel_stack_base = stack_base;
     task->pml4 = vmm_current_pml4(); /* the kernel's own address space, shared by every kernel thread */
     task->state = TASK_READY;
     task->next = NULL;
@@ -109,7 +166,11 @@ task_t *task_create_user(void)
        jump into is exactly the classic stack-smashing code-injection
        primitive -- marking it non-executable closes that off at the
        page-table level regardless of what any particular program does
-       or doesn't check. */
+       or doesn't check. Nothing is deliberately mapped just below
+       USER_STACK_VIRT_BASE either, so a downward overflow already
+       lands on an unmapped page and faults, the same guard-page
+       protection the dedicated kernel-stack region below gives kernel-
+       mode stacks explicitly (ADR 0012). */
     for (uint64_t off = 0; off < USER_STACK_SIZE; off += PMM_FRAME_SIZE) {
         uint64_t frame = pmm_alloc_frame();
         if (frame == 0) {
@@ -121,17 +182,16 @@ task_t *task_create_user(void)
     }
     uint64_t user_stack_top = USER_STACK_VIRT_BASE + USER_STACK_SIZE;
 
-    /* Separate kernel-mode stack: ordinary (supervisor-only) kmalloc'd
-       memory (in the KERNEL's own address space, shared/reachable from
-       every process's table via the copied PML4[511] entry), used for
-       TSS.RSP0 / syscall entry while this task is current. Must NOT be
-       user-accessible -- it holds kernel data during interrupt/syscall
-       handling. */
-    uint8_t *kernel_stack = (uint8_t *)kmalloc(USER_KERNEL_STACK_SIZE);
-    if (kernel_stack == NULL) {
-        panic("task_create_user: kmalloc failed for the kernel-mode stack");
-    }
-    uint64_t kernel_stack_top = (uint64_t)(kernel_stack + USER_KERNEL_STACK_SIZE);
+    /* Separate kernel-mode stack: its own dedicated, guard-paged VA
+       slot (alloc_kernel_stack(), same as a kernel thread's stack
+       above) rather than kmalloc(), in the KERNEL's own address space
+       (shared/reachable from every process's table via the copied
+       PML4[511] entry), used for TSS.RSP0 / syscall entry while this
+       task is current. Must NOT be user-accessible -- it holds kernel
+       data during interrupt/syscall handling; alloc_kernel_stack()
+       never sets VMM_FLAG_USER, so it isn't. */
+    uint64_t kernel_stack_base;
+    uint64_t kernel_stack_top = alloc_kernel_stack(USER_KERNEL_STACK_SIZE, &kernel_stack_base);
 
     /* The saved/synthetic context lives on the KERNEL stack, not the
        user one -- consistent with where a real preemption would leave
@@ -149,7 +209,7 @@ task_t *task_create_user(void)
 
     task->rsp = (uint64_t)frame;
     task->kernel_stack_top = kernel_stack_top;
-    task->kernel_stack_base = (uint64_t)(uintptr_t)kernel_stack;
+    task->kernel_stack_base = kernel_stack_base;
     task->pml4 = pml4;
     task->state = TASK_READY;
     task->next = NULL;
