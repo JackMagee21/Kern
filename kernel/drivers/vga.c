@@ -18,6 +18,18 @@
 #define VGA_BUFFER ((volatile uint16_t *)0xb8000)
 #define VGA_DEFAULT_ATTR 0x07 /* light grey on black */
 
+/* 0xB8000 is reachable from every address space, not just the kernel's
+   own: vmm_create_address_space() (kernel/mm/vmm.c) shares the kernel's
+   identity map (PML4[0], supervisor-only) into every process's page
+   table alongside the kernel-half (PML4[511]) it already shared, so
+   kernel code running under a process's CR3 -- a syscall or exception
+   handler, since neither SYSCALL nor an interrupt switches CR3 on
+   entry -- can still reach identity-mapped kernel structures like this
+   one. See ADR 0009 for how this was found (sys_write's console_putc()
+   faulted immediately when called from a running process) and why
+   sharing PML4[0] is safe (still supervisor-only, so ring-3 code itself
+   still can't touch it). */
+
 #define VGA_CRTC_INDEX       0x3d4
 #define VGA_CRTC_DATA        0x3d5
 #define VGA_CRTC_CURSOR_HIGH 0x0e
