@@ -128,6 +128,14 @@ uint64_t vmm_create_address_space(void);
    switch-timing bug. */
 void vmm_destroy_address_space(uint64_t pml4_phys);
 
+/* Returns true and sets *out_phys to the mapped physical frame if
+   virt_addr is present; returns false (leaving *out_phys untouched)
+   otherwise. General VA->PA lookup -- needed by a caller that wants to
+   pmm_free_frame() what vmm_unmap_page() is about to discard, since
+   vmm_unmap_page() deliberately doesn't do that itself (see its own
+   doc comment below). */
+bool vmm_translate(uint64_t virt_addr, uint64_t *out_phys);
+
 /* Unmaps virt_addr if mapped; no-op otherwise. Does NOT free the
    underlying physical frame -- that's the caller's job (pmm_free_frame),
    kept separate on purpose (small single-purpose functions). */

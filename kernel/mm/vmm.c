@@ -240,6 +240,40 @@ void vmm_destroy_address_space(uint64_t pml4_phys)
     pmm_free_frame(pml4_phys);
 }
 
+bool vmm_translate(uint64_t virt_addr, uint64_t *out_phys)
+{
+    uint64_t *pml4 = get_pml4();
+
+    uint64_t pml4e = pml4[pml4_index(virt_addr)];
+    if (!(pml4e & PTE_PRESENT)) {
+        return false;
+    }
+    uint64_t *pdpt = (uint64_t *)(uintptr_t)(pml4e & PTE_ADDR_MASK);
+
+    uint64_t pdpte = pdpt[pdpt_index(virt_addr)];
+    if (!(pdpte & PTE_PRESENT)) {
+        return false;
+    }
+    uint64_t *pd = (uint64_t *)(uintptr_t)(pdpte & PTE_ADDR_MASK);
+
+    uint64_t pde = pd[pd_index(virt_addr)];
+    if (!(pde & PTE_PRESENT)) {
+        return false;
+    }
+    if (pde & PTE_PS) {
+        *out_phys = (pde & PTE_ADDR_MASK) | (virt_addr & 0x1fffffULL); /* 2MiB page: PDE is the leaf */
+        return true;
+    }
+    uint64_t *pt = (uint64_t *)(uintptr_t)(pde & PTE_ADDR_MASK);
+
+    uint64_t pte = pt[pt_index(virt_addr)];
+    if (!(pte & PTE_PRESENT)) {
+        return false;
+    }
+    *out_phys = (pte & PTE_ADDR_MASK) | (virt_addr & 0xfffULL);
+    return true;
+}
+
 void vmm_unmap_page(uint64_t virt_addr)
 {
     uint64_t *pml4 = get_pml4();
