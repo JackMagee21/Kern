@@ -460,15 +460,66 @@ recovery/signal-delivery mechanism exists yet, so a real NX violation
 still just halts the kernel rather than terminating only the
 offending process.
 
-## 12. FS, SMP, and whatever's learned by then (sequence TBD)
+## 12. Kernel stack guard pages — DONE
+Fourth step of the post-Milestone-8 "build this into an OS" inventory —
+"guard pages," the last of the memory-maturity items named alongside
+NX (Milestone 11) in that original list.
+**Proves:** every kernel-mode stack (a kernel thread's whole stack, a
+ring-3 process's separate kernel-mode stack) lives in its own
+dedicated, page-mapped VA region with a genuinely unmapped guard page
+immediately below it — a downward overflow now takes an immediate
+`#PF` instead of silently corrupting an adjacent heap object, which is
+what the previous `kmalloc()`-based stacks were exposed to.
+**Deliverables:**
+- `kernel/mm/vmm.h/.c`: `vmm_translate()` (general VA->PA lookup, used
+  both by teardown and the new self-test).
+- `kernel/sched/task.c`: `alloc_kernel_stack()`/
+  `task_free_kernel_stack()`, a dedicated `PML4[511]:PDPT[509]` (
+  `0xFFFFFFFF40000000`) region with a guard page before every stack
+  slot, shared by both `task_create()` and `task_create_user()` instead
+  of `kmalloc()`. Also documents that a process's USER-mode stack
+  already had equivalent protection as a side effect of ADR 0009's
+  sparse per-process address-space design.
+- `kernel/sched/scheduler.c`: the reaper now calls
+  `task_free_kernel_stack()` instead of `kfree()` to tear down a
+  reaped process's kernel-mode stack.
+- `kernel/kernel.c`: self-test confirming the page below a live kernel
+  thread's stack is genuinely unmapped.
+**Verification:** `make run` boots and prints `[OK] guard page
+self-test passed (kernel stack guard page is unmapped)` right after
+`[OK] tss/syscall initialized`, with every Milestone 1-11 marker
+through the shell prompt unchanged afterward. A `-d int,cpu_reset`
+trace across a full boot showed zero page/double faults (only the
+deliberate `#BP`) and every timer-tick IRQ landing on `SP` values
+inside the new dedicated region. `tests/qemu/
+test_guard_page_selftest.sh` (new) verifies the marker and its
+ordering. The Milestone 10 process-lifecycle leak check still passes
+unmodified — now a strictly stronger check, since a process's kernel
+stack consumes real `pmm` frames directly rather than being hidden
+inside the heap's fixed footprint. All eleven earlier smoke tests and
+all three host tests re-verified passing. Booted 4 times back to back
+with identical output — correct on the first real attempt, no
+flakiness, same as Milestones 10 and 11.
+**Design record:** `docs/adr/0012-kernel-stack-guard-pages.md`.
+**Known limitation (accepted for this milestone only):** the kernel
+heap itself has no guard pages or per-allocation isolation (one
+contiguous first-fit-managed region, unchanged); guard-page VA slots
+are never reclaimed/reused even after a task is reaped (a monotonic
+bump allocator, acceptable until something actually approaches
+exhausting the dedicated 1GiB region, which nothing here does yet); no
+exception-recovery/signal-delivery mechanism exists yet, so a real
+stack overflow still halts the kernel rather than terminating only the
+offending task.
 
-Milestone 12 is intentionally left as a one-line placeholder here — full
+## 13. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 13 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
 an ELF loader + `fork`/`exec`, a disk driver + real filesystem, PCI
 enumeration, graphics/mouse/RTC/shutdown drivers, remaining memory
-maturity items (VMAs, demand paging/COW, guard pages, a general physical
-direct-map), and synchronization/IPC — plus explicit SMP/networking
-non-goal decisions still needing the user's call.
+maturity items (VMAs, demand paging/COW, a general physical direct-map),
+and synchronization/IPC — plus explicit SMP/networking non-goal
+decisions still needing the user's call.
