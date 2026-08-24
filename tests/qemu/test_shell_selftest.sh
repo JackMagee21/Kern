@@ -100,7 +100,7 @@ check() {
 
 check "kernel shell -- type 'help' for commands"
 check "> help"
-check "commands: help, echo <text>, uptime, date, clear"
+check "commands: help, echo <text>, uptime, date, reboot, clear"
 check "> echo shelltest123"
 check "shelltest123"
 check "> date"
