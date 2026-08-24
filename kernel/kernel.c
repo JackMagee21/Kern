@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "drivers/serial.h"
@@ -6,6 +7,7 @@
 #include "drivers/pic.h"
 #include "drivers/pit.h"
 #include "drivers/keyboard.h"
+#include "drivers/pci.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "arch/x86_64/tss.h"
@@ -43,6 +45,40 @@ static void demo_task_b(void)
 {
     for (;;) {
         demo_task_b_ticks++;
+    }
+}
+
+/* Milestone 13 (ADR 0013) self-test state: single-writer (pci_scan()'s
+   callback runs synchronously, once per found device, all from one
+   pci_scan() call on the bootstrap task) -- no synchronization needed,
+   same reasoning as the demo task counters above. */
+static bool pci_found_host_bridge;
+
+static void pci_report_device(const pci_device_t *dev, void *ctx)
+{
+    (void)ctx;
+    console_write("[PCI] bus 0x");
+    console_write_hex(dev->bus);
+    console_write(" dev 0x");
+    console_write_hex(dev->device);
+    console_write(" fn 0x");
+    console_write_hex(dev->function);
+    console_write(": vendor 0x");
+    console_write_hex(dev->vendor_id);
+    console_write(" device 0x");
+    console_write_hex(dev->device_id);
+    console_write(" class 0x");
+    console_write_hex(dev->class_code);
+    console_write("\n");
+
+    /* Every QEMU i440fx-based machine (the default "-M pc") has an
+       Intel (vendor 0x8086) host bridge at bus 0, device 0, function 0
+       -- the one assertion this self-test can rely on without
+       depending on which OTHER peripherals a particular QEMU version/
+       invocation happens to expose (IDE, VGA, etc. vary; the host
+       bridge doesn't). */
+    if (dev->bus == 0 && dev->device == 0 && dev->function == 0 && dev->vendor_id == 0x8086) {
+        pci_found_host_bridge = true;
     }
 }
 
@@ -149,6 +185,19 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        resumes normally after vector 3 specifically (see its comment),
        so boot continues right after this. */
     __asm__ volatile("int3");
+
+    /* Milestone 13 (ADR 0013): pure port I/O, no dependency on paging/
+       heap/scheduler state, so this can run anywhere -- placed here,
+       grouped with the rest of hardware/driver bring-up rather than
+       the earlier memory-management self-tests. */
+    pci_found_host_bridge = false;
+    uint32_t pci_device_count = pci_scan(pci_report_device, NULL);
+    if (pci_device_count == 0 || !pci_found_host_bridge) {
+        panic("pci self-test failed: no devices found or host bridge missing");
+    }
+    console_write("[OK] pci self-test passed (0x");
+    console_write_hex(pci_device_count);
+    console_write(" device(s) found, host bridge present)\n");
 
     pic_remap();
     pit_init(TIMER_FREQUENCY_HZ);
