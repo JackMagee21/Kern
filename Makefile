@@ -23,7 +23,7 @@ C_SOURCES := kernel/kernel.c kernel/panic.c kernel/shell.c kernel/drivers/serial
              kernel/drivers/pic.c kernel/drivers/pit.c kernel/drivers/keyboard.c kernel/drivers/pci.c kernel/drivers/rtc.c \
              libk/fmt.c libk/heap_alloc.c libk/ring_buffer.c \
              kernel/arch/x86_64/gdt.c kernel/arch/x86_64/idt.c kernel/arch/x86_64/exceptions.c kernel/arch/x86_64/irq_dispatch.c \
-             kernel/arch/x86_64/tss.c kernel/arch/x86_64/syscall.c \
+             kernel/arch/x86_64/tss.c kernel/arch/x86_64/syscall.c kernel/arch/x86_64/reboot.c \
              kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/heap.c \
              kernel/sched/task.c kernel/sched/scheduler.c
 ASM_SOURCES := kernel/arch/x86_64/boot.asm kernel/arch/x86_64/gdt_flush.asm kernel/arch/x86_64/isr.asm kernel/arch/x86_64/irq.asm \
