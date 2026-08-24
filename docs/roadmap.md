@@ -632,15 +632,64 @@ re-verified passing. Correct on the first real attempt.
 (reset only) — ACPI-based shutdown remains flagged, awaiting the
 user's decision on the ACPI non-goal.
 
-## 16. FS, SMP, and whatever's learned by then (sequence TBD)
+## 16. PS/2 mouse driver — DONE
+Eighth step of the post-Milestone-8 "build this into an OS" inventory —
+"mouse," the last hardware item from the original list not adjacent to
+a flagged non-goal. No graphics/framebuffer exists yet (VGA text mode
+only, ADR 0008), so there's no cursor to draw — this proves the PS/2
+protocol can be decoded correctly, deferring rendering to a future
+graphics milestone.
+**Proves:** real PS/2 mouse movement and button packets, injected as
+actual synthetic hardware events (not a shortcut around the driver),
+are correctly decoded — not just that `mouse_init()` runs without
+crashing.
+**Deliverables:**
+- `kernel/drivers/mouse.h/.c` (new): `mouse_init()`/`mouse_has_event()`/
+  `mouse_get_event()` — 8042 auxiliary-port setup, IRQ12 registration,
+  standard 3-byte streaming packet decode into a small fixed-capacity
+  event queue.
+- `kernel/kernel.c`: unmasks IRQ2 (the master PIC's cascade line —
+  required for ANY slave-PIC line, including IRQ12, to ever reach the
+  CPU) alongside IRQ12.
+- `kernel/shell.c`: new `mouse` command.
+**Verification:** `make run` boots and prints `[OK] pic/pit/keyboard/
+mouse initialized, IRQ0+IRQ1+IRQ2+IRQ12 unmasked`, confirmed against
+live QEMU-monitor `info pic` register state, not just the kernel's own
+claim. **A real bug was found and fixed during verification** — the
+first of this session's eight milestones to hit one on a live boot: a
+stray device ACK byte (`0xFA`) could arrive asynchronously and get
+mistaken for a legitimate packet-start byte (its bit 3 coincidentally
+matches the framing spec's resync bit), corrupting the first real
+packet and permanently desyncing the parser. Diagnosed via temporary
+per-byte instrumentation (not guessed), fixed with an explicit
+ACK/RESEND byte-value check in the packet parser. Confirmed fixed by
+rerunning the exact failing scenario. `tests/qemu/
+test_mouse_selftest.sh` (new) injects real synthetic movement and
+button events via the QEMU monitor and asserts the shell decoded them
+correctly, with real polling-based step synchronization (a timing bug
+in an earlier draft of the test itself produced a separate, misleading
+intermediate failure during development). `test_shell_selftest.sh` and
+`test_timer_irq_selftest.sh` needed stale marker text updated. All
+fifteen earlier smoke tests and all three host tests re-verified
+passing.
+**Design record:** `docs/adr/0016-ps2-mouse-driver.md` — includes the
+full diagnostic trail for the ACK-byte bug.
+**Known limitation (accepted for this milestone only):** no
+cursor/display integration (nothing to draw one on yet); `dx`/`dy` are
+reported in raw PS/2 wire convention (positive `dy` = up), left
+unconverted since there's no display consumer yet to define a screen
+convention; no scroll-wheel (`IntelliMouse`) support.
 
-Milestone 16 is intentionally left as a one-line placeholder here — full
+## 17. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 17 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
-an ELF loader + `fork`/`exec`, a mouse driver, remaining memory maturity
-items (VMAs, demand paging/COW, a general physical direct-map), and
-synchronization/IPC — plus a disk driver + real filesystem, ACPI-based
-shutdown, and SMP/networking, all explicitly flagged to the user rather
-than started, still awaiting a decision.
+an ELF loader + `fork`/`exec`, remaining memory maturity items (VMAs,
+demand paging/COW, a general physical direct-map), and synchronization/
+IPC — plus a disk driver + real filesystem, ACPI-based shutdown, and
+SMP/networking, all explicitly flagged to the user rather than started,
+still awaiting a decision. See `future.md` for a fuller continuation
+briefing.
