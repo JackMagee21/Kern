@@ -1,0 +1,100 @@
+#include <stdbool.h>
+
+#include "shell.h"
+#include "drivers/console.h"
+#include "drivers/keyboard.h"
+#include "drivers/pit.h"
+
+#define SHELL_LINE_MAX 128
+
+/* No libk string module yet -- these two tiny, single-purpose helpers
+   are all a 4-command shell needs, so they live here rather than
+   introducing a new shared module for something this narrow (revisit
+   if/when something else also needs string comparison). */
+static bool str_eq(const char *a, const char *b)
+{
+    while (*a != '\0' && *b != '\0') {
+        if (*a != *b) {
+            return false;
+        }
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static bool str_starts_with(const char *s, const char *prefix)
+{
+    while (*prefix != '\0') {
+        if (*s != *prefix) {
+            return false;
+        }
+        s++;
+        prefix++;
+    }
+    return true;
+}
+
+static void read_line(char *buf, int max_len)
+{
+    int len = 0;
+    for (;;) {
+        while (!keyboard_has_char()) {
+            __asm__ volatile("hlt");
+        }
+        char c = keyboard_getc();
+
+        if (c == '\n') {
+            console_putc('\n');
+            break;
+        } else if (c == '\b') {
+            if (len > 0) {
+                len--;
+                console_write("\b \b"); /* back over the char, blank it, back again */
+            }
+        } else if (len < max_len - 1 && c >= 32 && c < 127) {
+            buf[len++] = c;
+            console_putc(c);
+        }
+        /* other control characters (tab, esc, ...) are silently ignored -- not needed yet */
+    }
+    buf[len] = '\0';
+}
+
+static void run_command(const char *line)
+{
+    if (line[0] == '\0') {
+        return;
+    }
+
+    if (str_eq(line, "help")) {
+        console_write("commands: help, echo <text>, uptime, clear\n");
+    } else if (str_eq(line, "uptime")) {
+        console_write("ticks: 0x");
+        console_write_hex(pit_get_ticks());
+        console_write("\n");
+    } else if (str_eq(line, "clear")) {
+        console_clear();
+    } else if (str_eq(line, "echo")) {
+        console_write("\n");
+    } else if (str_starts_with(line, "echo ")) {
+        console_write(line + 5);
+        console_write("\n");
+    } else {
+        console_write("unknown command: ");
+        console_write(line);
+        console_write("\n");
+    }
+}
+
+void shell_run(void)
+{
+    char line[SHELL_LINE_MAX];
+
+    console_write("\nkernel shell -- type 'help' for commands\n");
+    for (;;) {
+        console_write("> ");
+        read_line(line, SHELL_LINE_MAX);
+        run_command(line);
+    }
+}
