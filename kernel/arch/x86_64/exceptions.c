@@ -2,7 +2,7 @@
 
 #include "idt.h"
 #include "trap_frame.h"
-#include "../../drivers/serial.h"
+#include "../../drivers/console.h"
 
 /* Intel SDM Vol. 3A Table 6-1 "Protected-Mode Exceptions and
    Interrupts". Vectors 22-27/31 are architecturally reserved; 28-30 are
@@ -47,9 +47,9 @@ static uint64_t read_cr2(void)
 
 static void dump_field(const char *label, uint64_t value)
 {
-    serial_write(label);
-    serial_write_hex(value);
-    serial_write("\n");
+    console_write(label);
+    console_write_hex(value);
+    console_write("\n");
 }
 
 /* CLAUDE.md safety rule 6: on unrecoverable error, print full state to
@@ -67,9 +67,9 @@ static void dump_field(const char *label, uint64_t value)
    Milestone 6 task switch, only irq_handler's timer path does. */
 trap_frame_t *isr_handler(trap_frame_t *frame)
 {
-    serial_write("\n[PANIC] exception: ");
-    serial_write(exception_names[frame->vector]);
-    serial_write("\n");
+    console_write("\n[PANIC] exception: ");
+    console_write(exception_names[frame->vector]);
+    console_write("\n");
 
     dump_field("  vector:      0x", frame->vector);
     dump_field("  error_code:  0x", frame->error_code);

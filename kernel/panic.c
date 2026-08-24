@@ -1,11 +1,11 @@
 #include "panic.h"
-#include "drivers/serial.h"
+#include "drivers/console.h"
 
 void panic(const char *message)
 {
-    serial_write("[PANIC] ");
-    serial_write(message);
-    serial_write("\n");
+    console_write("[PANIC] ");
+    console_write(message);
+    console_write("\n");
     for (;;) {
         __asm__ volatile("cli; hlt");
     }

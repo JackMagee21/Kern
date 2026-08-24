@@ -1,8 +1,11 @@
 #include <stdint.h>
 
 #include "drivers/serial.h"
+#include "drivers/vga.h"
+#include "drivers/console.h"
 #include "drivers/pic.h"
 #include "drivers/pit.h"
+#include "drivers/keyboard.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "arch/x86_64/tss.h"
@@ -12,6 +15,7 @@
 #include "sched/scheduler.h"
 #include "sched/task.h"
 #include "panic.h"
+#include "shell.h"
 
 #define TIMER_FREQUENCY_HZ 100u
 #define TIMER_SELFTEST_TARGET_TICKS 100u /* ~1 real second at 100Hz */
@@ -44,23 +48,24 @@ static void demo_task_b(void)
 void kernel_main(uint32_t magic, uint32_t mbi_addr)
 {
     serial_init();
+    vga_init();
 
     if (magic != MULTIBOOT2_BOOTLOADER_MAGIC) {
         panic("invalid multiboot2 magic");
     }
 
-    serial_write("[OK] hello kernel\n");
+    console_write("[OK] hello kernel\n");
 
     gdt_init();
     idt_init();
-    serial_write("[OK] gdt/idt installed\n");
+    console_write("[OK] gdt/idt installed\n");
 
     pmm_init(mbi_addr);
-    serial_write("[OK] pmm initialized, free frames: 0x");
-    serial_write_hex(pmm_frames_free());
-    serial_write(" / total: 0x");
-    serial_write_hex(pmm_frames_total());
-    serial_write("\n");
+    console_write("[OK] pmm initialized, free frames: 0x");
+    console_write_hex(pmm_frames_free());
+    console_write(" / total: 0x");
+    console_write_hex(pmm_frames_total());
+    console_write("\n");
 
     /* Milestone 3 self-test: allocate two distinct frames, free one,
        and confirm the next allocation reuses exactly that frame --
@@ -76,10 +81,10 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (frame_c != frame_a) {
         panic("pmm self-test failed: freed frame not reused");
     }
-    serial_write("[OK] pmm self-test passed (alloc/free/reuse)\n");
+    console_write("[OK] pmm self-test passed (alloc/free/reuse)\n");
 
     heap_init();
-    serial_write("[OK] kernel heap initialized\n");
+    console_write("[OK] kernel heap initialized\n");
 
     /* Milestone 4 self-test: allocate two distinct blocks, write and
        read back distinct fill patterns (catches overlap bugs the
@@ -113,7 +118,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (heap_c != heap_a) {
         panic("heap self-test failed: freed block not reused");
     }
-    serial_write("[OK] heap self-test passed (alloc/write/verify/free/reuse)\n");
+    console_write("[OK] heap self-test passed (alloc/write/verify/free/reuse)\n");
 
     /* Milestone 2 self-test: deliberately take a #BP fault and check its
        dump reports the right vector -- exceptions.c's isr_handler
@@ -131,7 +136,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        descriptor slot and the GDT selector layout STAR depends on). */
     tss_init();
     syscall_init();
-    serial_write("[OK] tss/syscall initialized\n");
+    console_write("[OK] tss/syscall initialized\n");
 
     /* Milestone 6: scheduler owns IRQ0 now (it calls pit_tick() itself
        -- see kernel/sched/scheduler.c), so it must be wired up before
@@ -142,11 +147,13 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     scheduler_add_task(task_create(demo_task_a));
     scheduler_add_task(task_create(demo_task_b));
     scheduler_add_task(task_create_user());
-    serial_write("[OK] scheduler initialized, 2 kernel + 1 ring-3 demo task created\n");
+    console_write("[OK] scheduler initialized, 2 kernel + 1 ring-3 demo task created\n");
 
-    pic_clear_mask(0); /* unmask IRQ0 (timer) only -- nothing else has a handler yet */
+    keyboard_init();
+    pic_clear_mask(0); /* IRQ0: timer */
+    pic_clear_mask(1); /* IRQ1: keyboard */
     __asm__ volatile("sti");
-    serial_write("[OK] pic/pit initialized, timer IRQ0 unmasked\n");
+    console_write("[OK] pic/pit/keyboard initialized, IRQ0+IRQ1 unmasked\n");
 
     /* Milestone 5 self-test: wait for real IRQ0 ticks to accumulate
        instead of just checking pit_init() didn't crash -- proves the
@@ -155,9 +162,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     while (pit_get_ticks() < TIMER_SELFTEST_TARGET_TICKS) {
         __asm__ volatile("hlt");
     }
-    serial_write("[OK] timer self-test passed (");
-    serial_write_hex(pit_get_ticks());
-    serial_write(" ticks received via IRQ0)\n");
+    console_write("[OK] timer self-test passed (");
+    console_write_hex(pit_get_ticks());
+    console_write(" ticks received via IRQ0)\n");
 
     /* Milestone 6 self-test: by now ~1 real second (100 ticks) has
        elapsed. If preemption weren't actually forcing the CPU away from
@@ -170,11 +177,11 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (demo_task_a_ticks == 0 || demo_task_b_ticks == 0) {
         panic("scheduler self-test failed: a demo task never got scheduled");
     }
-    serial_write("[OK] scheduler self-test passed, task A: 0x");
-    serial_write_hex(demo_task_a_ticks);
-    serial_write(", task B: 0x");
-    serial_write_hex(demo_task_b_ticks);
-    serial_write(" (both made progress under preemption)\n");
+    console_write("[OK] scheduler self-test passed, task A: 0x");
+    console_write_hex(demo_task_a_ticks);
+    console_write(", task B: 0x");
+    console_write_hex(demo_task_b_ticks);
+    console_write(" (both made progress under preemption)\n");
 
     /* Milestone 7 self-test: by now the ring-3 demo task should have
        made its one-shot sys_write call (proving the validated-pointer
@@ -185,13 +192,16 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (syscall_get_count() <= 1) {
         panic("syscall self-test failed: ring-3 task's syscalls did not land repeatedly");
     }
-    serial_write("[OK] syscall self-test passed, ");
-    serial_write_hex(syscall_get_count());
-    serial_write(" syscalls serviced from ring 3\n");
+    console_write("[OK] syscall self-test passed, ");
+    console_write_hex(syscall_get_count());
+    console_write(" syscalls serviced from ring 3\n");
 
-    /* Steady state: idle, servicing timer interrupts (and now, the
-       round-robin scheduler) forever. */
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
+    /* Steady state: an interactive shell instead of a bare idle loop --
+       this is what actually makes the kernel usable sitting at real
+       hardware. Still just one more participant in the scheduler's
+       round-robin (kernel_main's own bootstrap task), competing fairly
+       with the Milestone 6/7 demo tasks the same way any task does;
+       waiting on keyboard input via hlt naturally yields the rest of
+       its time slice each round. */
+    shell_run();
 }

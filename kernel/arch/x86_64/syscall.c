@@ -2,7 +2,7 @@
 
 #include "syscall.h"
 #include "gdt.h"
-#include "../../drivers/serial.h"
+#include "../../drivers/console.h"
 #include "../../mm/vmm.h"
 
 /*
@@ -80,7 +80,7 @@ static void sys_write(syscall_frame_t *frame)
 
     const uint8_t *buf = (const uint8_t *)(uintptr_t)ptr;
     for (uint64_t i = 0; i < len; i++) {
-        serial_putc((char)buf[i]);
+        console_putc((char)buf[i]);
     }
     frame->rax = len;
 }
