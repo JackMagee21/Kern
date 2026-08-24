@@ -5,6 +5,8 @@
 #include "drivers/pit.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
+#include "arch/x86_64/tss.h"
+#include "arch/x86_64/syscall.h"
 #include "mm/pmm.h"
 #include "mm/heap.h"
 #include "sched/scheduler.h"
@@ -122,15 +124,25 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     pic_remap();
     pit_init(TIMER_FREQUENCY_HZ);
 
+    /* Milestone 7: TSS (needed for TSS.RSP0 whenever a ring-3 task is
+       interrupted -- see task.h) and SYSCALL/SYSRET MSR programming.
+       tss_init() needs the heap (its default RSP0 stack), so this runs
+       after heap_init(), and both need gdt_init() already done (the TSS
+       descriptor slot and the GDT selector layout STAR depends on). */
+    tss_init();
+    syscall_init();
+    serial_write("[OK] tss/syscall initialized\n");
+
     /* Milestone 6: scheduler owns IRQ0 now (it calls pit_tick() itself
        -- see kernel/sched/scheduler.c), so it must be wired up before
        ticks start flowing. Bootstrap task represents kernel_main's own
-       context; the two demo tasks join the round-robin before
-       interrupts are enabled. */
+       context; the demo tasks join the round-robin before interrupts
+       are enabled. */
     scheduler_init();
     scheduler_add_task(task_create(demo_task_a));
     scheduler_add_task(task_create(demo_task_b));
-    serial_write("[OK] scheduler initialized, 2 demo tasks created\n");
+    scheduler_add_task(task_create_user());
+    serial_write("[OK] scheduler initialized, 2 kernel + 1 ring-3 demo task created\n");
 
     pic_clear_mask(0); /* unmask IRQ0 (timer) only -- nothing else has a handler yet */
     __asm__ volatile("sti");
@@ -163,6 +175,19 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     serial_write(", task B: 0x");
     serial_write_hex(demo_task_b_ticks);
     serial_write(" (both made progress under preemption)\n");
+
+    /* Milestone 7 self-test: by now the ring-3 demo task should have
+       made its one-shot sys_write call (proving the validated-pointer
+       path) and be well into its sys_nop loop (proving SYSCALL/SYSRET
+       round-trips reliably, not just once). syscall_get_count() covers
+       both syscalls, so ">1" is the meaningful bar: exactly the
+       sys_write call and nothing else would mean sys_nop never landed. */
+    if (syscall_get_count() <= 1) {
+        panic("syscall self-test failed: ring-3 task's syscalls did not land repeatedly");
+    }
+    serial_write("[OK] syscall self-test passed, ");
+    serial_write_hex(syscall_get_count());
+    serial_write(" syscalls serviced from ring 3\n");
 
     /* Steady state: idle, servicing timer interrupts (and now, the
        round-robin scheduler) forever. */
