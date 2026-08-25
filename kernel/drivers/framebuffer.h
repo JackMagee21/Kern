@@ -60,14 +60,28 @@ void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color
    doc comment). */
 void fb_read_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t *out);
 
-/* Shifts the ENTIRE framebuffer's pixel content up by `rows` pixel rows
-   (a raw row-by-row memory copy via the internal base pointer, not
-   composed of many bounds-checked single-pixel writes), then fills the
-   newly-exposed bottom `rows` rows with fill_color. The pixel-level
-   primitive kernel/drivers/fbconsole.c's own text scrolling is built
-   on, kept here rather than exposed via fb_put_pixel() in a loop since
-   only this file's internals know the raw row stride (fb_pitch may
-   include padding beyond width*4). */
-void fb_scroll_up(uint32_t rows, uint32_t fill_color);
+/* Shifts pixel content up by `rows` pixel rows WITHIN [0, region_height)
+   only (a raw row-by-row memory copy via the internal base pointer, not
+   composed of many bounds-checked single-pixel writes) -- everything at
+   y >= region_height is left COMPLETELY untouched -- then fills the
+   newly-exposed rows at the bottom of the region with fill_color. The
+   pixel-level primitive kernel/drivers/fbconsole.c's own text
+   scrolling is built on, kept here rather than exposed via
+   fb_put_pixel() in a loop since only this file's internals know the
+   raw row stride (fb_pitch may include padding beyond width*4).
+   region_height is clamped to fb_height if it's ever larger.
+
+   Milestone 30 (ADR 0030): region_height was added -- previously this
+   always shifted the FULL framebuffer, which corrupted any
+   already-composited content sitting below the console's own text
+   (kernel/user/display_server.c's windows, discovered as a real,
+   growing architectural gap in Milestone 28, ADR 0028's own Known
+   limitations) once enough console output accumulated to scroll.
+   fbconsole.c now reserves a FIXED height for its own scrollable text
+   region (well short of the full screen) and passes it here, so
+   anything placed at a y at or beyond that reserved height -- the
+   "desktop" area -- is now permanently immune to console scrolling,
+   not just less likely to be disturbed. */
+void fb_scroll_up(uint32_t rows, uint32_t fill_color, uint32_t region_height);
 
 #endif /* KERNEL_DRIVERS_FRAMEBUFFER_H */

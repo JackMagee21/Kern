@@ -30,6 +30,13 @@
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289u
 
+/* Milestone 30 (ADR 0030): see the process-lifecycle self-test's own
+   doc comment (below, where this is used) for the full derivation --
+   2 windows * ceil(200*150*4 / PMM_FRAME_SIZE) pages each, permanently
+   held by the (deliberately baseline-excluded) persistent display
+   server. */
+#define DISPLAY_SERVER_PERMANENT_CANVAS_PAGES 60u
+
 extern const uint8_t fork_demo_image_start[]; /* kernel/user/embed/fork_demo_blob.asm: embedded build/kernel/user/fork_demo.elf */
 extern const uint8_t fork_demo_image_end[];
 extern const uint8_t exec_demo_image_start[]; /* kernel/user/embed/exec_demo_blob.asm: embedded build/kernel/user/exec_demo.elf */
@@ -44,8 +51,6 @@ extern const uint8_t display_client_a_image_start[]; /* kernel/user/embed/displa
 extern const uint8_t display_client_a_image_end[];
 extern const uint8_t display_client_b_image_start[]; /* kernel/user/embed/display_client_b_blob.asm: embedded build/kernel/user/display_client_b.elf */
 extern const uint8_t display_client_b_image_end[];
-extern const uint8_t input_focus_demo_image_start[]; /* kernel/user/embed/input_focus_demo_blob.asm: embedded build/kernel/user/input_focus_demo.elf */
-extern const uint8_t input_focus_demo_image_end[];
 
 /* Milestone 6 self-test: two kernel threads that never voluntarily
    yield, proving the scheduler forcibly preempts a task that never
@@ -421,33 +426,35 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     }
     console_write("[OK] guard page self-test passed (kernel stack guard page is unmapped)\n");
 
-    /* Milestone 29 (ADR 0029): the input-focus demo, created HERE --
-       before the frame-leak baseline just below, alongside the
-       permanent kernel threads (demo_task_a/b, block_test_blocker/
-       waker), NOT alongside every other ring-3 demo process further
-       down (which all run bounded, exit on their own, and are counted
-       in the reap-count/leak-check gate below). This one is
-       deliberately different: it blocks FOREVER waiting for a REAL
-       external mouse click (kernel/drivers/cursor.c's own edge
-       detection, driven by an actual IRQ12 report) that a plain
-       headless boot with no QEMU monitor injection will never send --
-       same steady-state as the shell itself waiting on keyboard input,
-       not a hang. If it were created AFTER the baseline below (like
-       every other demo process) and counted in that gate's target,
-       EVERY OTHER smoke test that doesn't specifically inject a click
-       would hang forever waiting for a reap that can't happen without
-       external input -- creating it here, before the baseline, bakes
-       its own frame footprint into what's being compared FROM, so
-       the leak check only ever validates the OTHER, self-contained
-       demos' full teardown, exactly as before this milestone. Its own
-       actual behavior (subscribe, prove exclusivity, then genuinely
-       block) only runs once preemption starts (interrupts are still
-       off here) -- see kernel/user/input_focus_demo.c. */
-    task_t *input_focus_demo_process = task_create_user_image(input_focus_demo_image_start, input_focus_demo_image_end);
-    scheduler_add_task(input_focus_demo_process);
-    console_write("[OK] input focus demo process created, pid 0x");
-    console_write_hex(input_focus_demo_process->id);
-    console_write(" (blocks for a real injected click -- see tests/qemu/test_input_focus_selftest.sh)\n");
+    /* Milestone 27 (ADR 0027) / Milestone 30 (ADR 0030): the display
+       server, created HERE -- before the frame-leak baseline just
+       below, alongside the permanent kernel threads (demo_task_a/b,
+       block_test_blocker/waker), NOT alongside its own two clients
+       further down (which still run bounded, exit on their own, and
+       are counted in the reap-count/leak-check gate below). Milestone
+       30 made this server genuinely PERSISTENT -- it now subscribes to
+       real hardware input (superseding Milestone 29's own standalone
+       demo, retired this same milestone) and never exits during a
+       normal boot, waiting forever for further input the same way the
+       shell itself waits on keyboard input, not a hang. If it were
+       created AFTER the baseline below (like every other demo process)
+       and counted in that gate's target, EVERY OTHER smoke test that
+       doesn't specifically inject a click would hang forever waiting
+       for a reap that can't happen -- creating it here, before the
+       baseline, bakes its own frame footprint into what's being
+       compared FROM, so the leak check only ever validates the OTHER,
+       self-contained demos' full teardown. Its own actual behavior
+       (acquire the framebuffer, subscribe to input, serve its two
+       clients, then loop forever handling clicks) only runs once
+       preemption starts (interrupts are still off here) -- see
+       kernel/user/display_server.c. Its two clients are still created
+       further down, AFTER the baseline (they still exit normally), so
+       this pid must be known here first. */
+    task_t *display_server_process = task_create_user_image(display_server_image_start, display_server_image_end);
+    scheduler_add_task(display_server_process);
+    console_write("[OK] display server process created, pid 0x");
+    console_write_hex(display_server_process->id);
+    console_write(" (persistent -- serves its two clients below, then waits forever for input)\n");
 
     /* Milestone 10 (ADR 0010) self-test setup: captured BEFORE either
        process exists, so that once both have exited and been fully
@@ -540,17 +547,12 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(ipc_receiver_process->id);
     console_write("\n");
 
-    /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028): an EIGHTH,
-       NINTH, and TENTH orphan process -- Desktop.md's display server
-       and its two clients (Milestone 28 extended the original single
-       client into a deterministic two-window z-order demo). The SERVER
-       is created FIRST purely so its id is known here, to build both
-       clients' own bootstrap messages -- there's no equivalent
-       scheduling-order requirement to reason through, since the
-       request/grant/present handshake (display_protocol.h) is
-       inherently self-synchronizing via blocking IPC regardless of
-       which process the scheduler actually runs first (see
-       display_server.c's own comment). CLIENT B is created before
+    /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028) / Milestone 30
+       (ADR 0030): a NINTH and TENTH orphan process -- Desktop.md's
+       display server's two clients. The server itself was already
+       created earlier (before the frame-leak baseline -- see that
+       creation site's own comment for why it's no longer created
+       here), so its pid is already known. CLIENT B is created before
        CLIENT A, purely so client A's own bootstrap message (which
        carries client B's pid, for the go-signal hand-off) can be built
        here -- this is a compile-time/code-ordering constraint only,
@@ -558,8 +560,6 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        before client A's own go-signal arrives regardless of which of
        the two the scheduler actually runs first (see
        display_client_b.c's own comment). */
-    task_t *display_server_process = task_create_user_image(display_server_image_start, display_server_image_end);
-    scheduler_add_task(display_server_process);
     task_t *display_client_b_process = task_create_user_image(display_client_b_image_start, display_client_b_image_end);
     scheduler_add_task(display_client_b_process);
     task_t *display_client_a_process = task_create_user_image(display_client_a_image_start, display_client_a_image_end);
@@ -690,17 +690,49 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        whose own shared-memory canvas buffer is refcounted the
        identical way. Milestone 28 (ADR 0028) raised the target again,
        9 to 10: the single client became two (client A and client B),
-       each with its own independently refcounted canvas buffer. */
-    while (scheduler_reaped_count() < 10) {
+       each with its own independently refcounted canvas buffer.
+       Milestone 30 (ADR 0030) LOWERED the target back down, 10 to 9:
+       the display server itself is now genuinely persistent (it never
+       exits during a normal boot, see its own creation site's comment
+       above) and moved to be created BEFORE this baseline instead, so
+       only its two clients (still bounded, still exit normally)
+       contribute to this count now -- one fewer than before, not one
+       more, the first time this target has ever decreased. */
+    while (scheduler_reaped_count() < 9) {
         __asm__ volatile("hlt");
     }
+    /* Milestone 30 (ADR 0030): a real, EXPECTED (not leaked) deficit
+       from this exact baseline now exists, for the first time since
+       this self-test was written (Milestone 10). The display server
+       (created BEFORE this baseline, so invisible to it) maps a SECOND,
+       genuinely live reference to each of its two clients' shm canvas
+       buffers (kernel/ipc/shm.c's own refcounting, ADR 0021/0026) so it
+       can recomposite them on a later raise -- and, being persistent,
+       NEVER drops that reference during a normal boot. Each granted
+       canvas is display_server.c's own MAX_CANVAS_W(200) *
+       MAX_CANVAS_H(150) * 4 bytes = 120000, ceil-divided by
+       PMM_FRAME_SIZE(4096) = 30 pages (duplicated here as a plain
+       constant, the same "both sides hardcode consistently" pattern
+       already used for MAX_CANVAS_W/H's own value in display_server.c
+       -- a struct-layout mismatch would be dangerous, matching two
+       plain integers by convention is not) -- 2 windows * 30 pages = 60
+       pages that will NEVER come back during a normal boot, precisely
+       and only because the OWNER holding that second reference was
+       deliberately excluded from this very baseline. This is NOT the
+       same thing as a leak: a leak is memory nothing can account for;
+       this is memory a specific, still-running, intentionally-excluded
+       process is still legitimately using. Checking for EXACTLY this
+       expected deficit (not a loose tolerance) keeps the self-test just
+       as strict as before at catching a REAL leak -- any other delta
+       still panics. */
     uint64_t frames_after_reap = pmm_frames_free();
-    if (frames_after_reap != frames_before_processes) {
+    uint64_t expected_frames_after_reap = frames_before_processes - DISPLAY_SERVER_PERMANENT_CANVAS_PAGES;
+    if (frames_after_reap != expected_frames_after_reap) {
         panic("process lifecycle self-test failed: frames leaked after all processes exited");
     }
     console_write("[OK] process lifecycle self-test passed, all ring-3 processes exited and were fully reaped (0x");
     console_write_hex(frames_after_reap);
-    console_write(" frames free, matches pre-creation baseline)\n");
+    console_write(" frames free, matches pre-creation baseline minus the display server's own two permanently-held canvas buffers)\n");
 
     /* Milestone 20 (ADR 0020): proves sys_wait REALLY blocked at least
        once, not just that it eventually returned the right answer --

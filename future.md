@@ -17,11 +17,11 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 29 (2026-08-25)
+## State as of Milestone 30 (2026-08-25)
 
 **GUI arc in progress** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
-with the user). Milestones 24-29 (below) are the first six steps.
+with the user). Milestones 24-30 (below) are the first seven steps.
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -276,28 +276,45 @@ the design reasoning and any real bugs found along the way.
 29. **Real input-driven click routing** — the genuinely-new-subsystem
     half of milestone 5's split: a real PS/2 left-click, decoded by an
     actual IRQ12 report, delivered via IPC to a specific ring-3
-    process (`kernel/user/input_focus_demo.c`) for the first time this
-    kernel has ever done so. New `SYS_INPUT_SUBSCRIBE` syscall + a
-    small `kernel/drivers/input_router.c`, with click-EDGE detection
-    living in `cursor.c` (already sees every event's button level, the
+    process (`kernel/user/input_focus_demo.c`, a standalone proof-of-
+    mechanism demo, RETIRED the next milestone once something real
+    consumed it — see item 30) for the first time this kernel has ever
+    done so. New `SYS_INPUT_SUBSCRIBE` syscall + a small
+    `kernel/drivers/input_router.c`, with click-EDGE detection living
+    in `cursor.c` (already sees every event's button level, the
     natural place to turn it into a transition). A real structural
     conflict was found and fixed IN REVIEW, before ever booting: a
     process that blocks forever for external input can't be part of
     `kernel_main`'s own deterministic reap-count gate, or every OTHER
     headless test would hang forever — fixed by creating the demo
     BEFORE the frame-leak baseline, alongside the permanent kernel
-    threads rather than the bounded demo processes. Deliberately no
-    `kernel_main` panic-on-zero self-test for click delivery (unlike
-    every prior "prove it was exercised" counter) — nothing in this
-    kernel can synthesize a real click on its own; only
-    `test_input_focus_selftest.sh`'s own QEMU-monitor-injected click
-    (`mouse_move`/`mouse_button`, Milestones 16/23's technique) can
-    prove it, landing at the exact expected position. Deliberately NOT
-    wired to `display_server.c` actually raising a window yet — that
-    redesign (a persistent event loop replacing "serve N clients then
-    exit") is its own later milestone. See ADR 0029.
+    threads rather than the bounded demo processes. See ADR 0029.
+30. **Real click-driven window raising, and scroll-immune windows** —
+    wires Milestone 29's mechanism into an actual visible effect:
+    `display_server.c` redesigned from "serve N clients then exit"
+    into a genuinely persistent process that raises a window on a real
+    click (retiring Milestone 29's own standalone demo — an
+    unresolvable subscription-exclusivity conflict otherwise). Also
+    delivered the REAL fix for Milestone 28's own flagged, deferred gap
+    (windows drifting from console scroll) — this milestone's own
+    hit-testing turned that from cosmetic into a genuine functional bug
+    (a click at a window's REAL, drifted position would miss its
+    NOMINAL hit-test rect). `fb_scroll_up()` gained a bounded
+    `region_height`; windows relocated to y ≥ 480, permanently outside
+    the console's own reserved scroll region. Found and fixed two MORE
+    real bugs verifying all this, neither planned: a glyph-draw/cursor
+    corruption, and — the real prize — the actual root cause of a
+    genuine screendump-visible corruption: `console_putc()`'s shared
+    cursor state had NO mutual exclusion against preemption, so two
+    ring-3 processes' interleaved `sys_write()` calls could corrupt it
+    once enough processes existed to make the race likely (fixed with a
+    short interrupt-disabled critical section, the same save/restore-
+    flags idiom `scheduler_wake()` established, Milestone 25). Proven
+    with a SECOND QEMU screendump showing the overlap region genuinely
+    flip ownership after a real injected click. Reap-count target
+    LOWERED for the first time ever, 10 → 9. See ADR 0030.
 
-**Testing state:** 27 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+**Testing state:** 26 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Almost every milestone has its own dedicated smoke
 test (Milestone 24 is the one exception — see item 24 above for why
@@ -305,8 +322,8 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** twenty-three
-milestones (9-29) all followed the same pattern — implement, boot in
+**A note on process discipline that held up well:** twenty-four
+milestones (9-30) all followed the same pattern — implement, boot in
 QEMU for real, fix what actually breaks, write the ADR describing what
 was tried and what was learned (including dead ends), commit in small
 logical pieces. Milestones 10-15, 17-19, 21-22, 24, 27, and 29 all
@@ -315,10 +332,17 @@ landed correctly on the first real boot (Milestone 29's own real find
 test's reap-count gate — was caught in review, before ever booting, not
 from a live failure); Milestone 9 (per-process address spaces),
 Milestone 16 (PS/2 mouse), Milestone 25 (blocking/wake primitive),
-Milestone 26 (IPC/shm), and Milestone 28 (multi-window z-order — its
-own demo logic booted clean, but exposed a real, pre-existing latent
-bug in Milestone 23's mouse cursor via a
-pre-existing test, not a new one written to find it) each hit real bugs
+Milestone 26 (IPC/shm), Milestone 28 (multi-window z-order — its own
+demo logic booted clean, but exposed a real, pre-existing latent bug in
+Milestone 23's mouse cursor via a pre-existing test, not a new one
+written to find it), and Milestone 30 (window raising — its own core
+redesign booted clean, but verifying it surfaced a genuine
+screendump-visible corruption whose real root cause turned out to be a
+pre-existing, unguarded concurrency race in the console driver shared
+by every ring-3 process's `sys_write()`, exposed rather than caused by
+this milestone's own changes — see ADR 0030's Decision for the full
+diagnostic trail, including a rejected first fix that only made the
+corruption worse before the real cause was found) each hit real bugs
 that needed
 real diagnosis (not guessing) to fix — all are documented in detail in
 their ADRs (0009, 0016, 0025, 0026) specifically so the diagnostic
@@ -393,21 +417,14 @@ signal CLAUDE.md asks for before this territory gets touched.
 ## Reasonable next steps (not flagged, not started)
 
 The main line of "what's next" is now `Desktop.md`'s GUI arc (Milestones
-24-29 done; Milestone 30 = window chrome and basic widgets, which now
-also absorbs actually WIRING Milestone 29's click-delivery mechanism
-into `kernel/user/display_server.c` — raising/focusing the clicked
-window needs redesigning that server's own lifecycle from "serve N
-clients then exit" into a persistent event loop, real work belonging
-alongside chrome/widgets rather than its own separate milestone — then
-real apps). Also worth picking up alongside or before that: ADR 0028's
-own flagged, not-yet-fixed gap — windows currently drift if console
-text prints after they're drawn (fb_scroll_up() shifts the whole
-framebuffer; the mouse cursor was fixed the same way in Milestone 28,
-but a ring-3 window has no equivalent "please redraw yourself" hook
-yet — likely to matter more once Milestone 30 makes windows persistent
-and interactive). A real path-based `execve` remains
-blocked on the filesystem non-goal, which `Desktop.md`'s scope
-confirmation keeps deferred for this whole arc.
+24-30 done; Milestone 31 = window chrome and basic widgets — draggable/
+closable title bars, at least one interactive control — then real
+apps). ADR 0028's own flagged windows-drift-from-console-scroll gap was
+actually FIXED in Milestone 30, not just documented further: windows
+now live permanently below a reserved, bounded console scroll region,
+immune to it the same way the cursor already was. A real path-based
+`execve` remains blocked on the filesystem non-goal, which `Desktop.md`'s
+scope confirmation keeps deferred for this whole arc.
 
 A few smaller items outside that arc, not touching a non-goal:
 

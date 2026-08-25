@@ -149,22 +149,34 @@ each one is needed now, not a deliverables list.
      (`kernel/drivers/input_router.c`, new `SYS_INPUT_SUBSCRIBE`
      syscall) to a specific ring-3 process -- the first hardware event
      this kernel has ever delivered to userspace. Proven in isolation
-     with a small dedicated demo, NOT yet wired to
-     `display_server.c` actually raising the clicked window -- that
-     needs redesigning the server's own lifecycle (from "serve N
-     clients then exit" to a persistent event loop), pushed into
-     milestone 6 below instead of its own milestone. A real structural
+     with a small dedicated demo (retired the next milestone once
+     something real consumed it), NOT yet wired to `display_server.c`
+     actually raising the clicked window -- that needed redesigning the
+     server's own lifecycle (from "serve N clients then exit" to a
+     persistent event loop), its own milestone (5c). A real structural
      conflict (a process blocking forever for external input can't be
      part of `kernel_main`'s own deterministic reap-count gate, or every
      OTHER test would hang) was found and fixed in review before ever
      booting.
+   - **5c. Real click-driven window raising -- DONE (Milestone 30, ADR
+     0030).** `display_server.c` redesigned into a genuinely persistent
+     process (retiring milestone 5b's standalone demo -- an
+     unresolvable subscription-exclusivity conflict otherwise) that
+     hit-tests a real click against the current z-order and raises the
+     clicked window, proven via a SECOND screendump showing the overlap
+     region genuinely flip ownership. Also delivered the REAL fix for
+     5a's own flagged, deferred gap (windows drifting from console
+     scroll) -- this milestone's own hit-testing turned that from
+     cosmetic into a genuine functional bug (a click at a window's
+     REAL, drifted position would miss its NOMINAL hit-test rect), so
+     it couldn't be deferred again. Found and fixed two more real bugs
+     verifying all this: a glyph-draw/cursor corruption, and the real
+     root cause of a genuine screendump-visible corruption --
+     `console_putc()`'s shared cursor state had NO mutual exclusion
+     against preemption, exposed (not caused) by enough ring-3
+     processes now existing to make the race likely.
 6. **Window chrome and basic widgets.** Draggable/closable title bars,
-   at least one interactive control -- and now also where milestone
-   5b's click-delivery mechanism actually gets ACTED on for the first
-   time: `display_server.c` needs a real persistent event loop (a
-   genuine redesign from its current "serve N clients then exit"
-   shape) before raising a clicked window means anything. This is where
-   it starts feeling
+   at least one interactive control. This is where it starts feeling
    like a desktop rather than a windowing demo.
 7. **Real applications.** A small number of genuinely different
    programs (not just tech-demo processes) — candidates: a clock, a

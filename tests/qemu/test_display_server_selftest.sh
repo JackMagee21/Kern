@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
-# Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028) smoke test: boot
-# headless in QEMU and assert Desktop.md's display server actually
-# works end to end -- not just that its own markers printed, but that
-# the RIGHT pixels landed at the RIGHT place on the REAL framebuffer,
-# in the RIGHT z-order, and nowhere else. kernel/user/display_client_a.c
-# and display_client_b.c each deliberately ask for a canvas larger than
-# display_server.c's own fixed 200x150 maximum -- this is "the server
-# enforces the bound" (Desktop.md) made concrete. Milestone 28 added a
-# SECOND client whose 200x150 canvas is cascaded (+50, +50) from
-# client A's, genuinely overlapping it -- client A is guaranteed
-# (by an explicit go-signal hand-off, not a race) to be presented
-# first, so client B's window must appear drawn ON TOP of client A's in
-# the overlap region. A real QEMU `screendump` (the same technique
-# test_framebuffer_selftest.sh established, Milestone 23) is what
-# proves both the bound and the z-order pixel-for-pixel, not a trusted
-# self-report.
+# Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028) / Milestone 30
+# (ADR 0030) smoke test: boot headless in QEMU and assert Desktop.md's
+# display server actually works end to end -- not just that its own
+# markers printed, but that the RIGHT pixels landed at the RIGHT place
+# on the REAL framebuffer, in the RIGHT z-order, and nowhere else.
+# kernel/user/display_client_a.c and display_client_b.c each
+# deliberately ask for a canvas larger than display_server.c's own
+# fixed 200x150 maximum -- this is "the server enforces the bound"
+# (Desktop.md) made concrete. Milestone 28 added a SECOND client whose
+# 200x150 canvas is cascaded (+50, +50) from client A's, genuinely
+# overlapping it -- client A is guaranteed (by an explicit go-signal
+# hand-off, not a race) to be presented first, so client B's window
+# must appear drawn ON TOP of client A's in the overlap region.
+# Milestone 30 made the server genuinely PERSISTENT and wired
+# Milestone 29's real click-delivery mechanism into an actual visible
+# effect: this test now ALSO injects a real synthetic click (the same
+# `mouse_move`/`mouse_button` technique test_mouse_selftest.sh/
+# test_framebuffer_selftest.sh/the retired test_input_focus_selftest.sh
+# already established) onto client A's own exclusive region and
+# confirms, via a SECOND screendump, that the overlap region actually
+# FLIPS from orange (B) to teal (A) -- direct, pixel-level proof a real
+# click genuinely raised a window, not just that a message was
+# received.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -23,10 +30,11 @@ OS_ISO="$BUILD_DIR/os.iso"
 SERIAL_LOG="$BUILD_DIR/test_display_server_selftest.log"
 MONITOR_SOCK="$BUILD_DIR/test_display_server_selftest.mon.sock"
 SCREEN_PPM="$BUILD_DIR/test_display_server_selftest.ppm"
+SCREEN_PPM_AFTER="$BUILD_DIR/test_display_server_selftest_after_click.ppm"
 
 make -C "$ROOT_DIR" "build/os.iso"
 
-rm -f "$SERIAL_LOG" "$MONITOR_SOCK" "$SCREEN_PPM"
+rm -f "$SERIAL_LOG" "$MONITOR_SOCK" "$SCREEN_PPM" "$SCREEN_PPM_AFTER"
 
 timeout 20 qemu-system-x86_64 \
     -cdrom "$OS_ISO" \
@@ -42,10 +50,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-python3 - "$MONITOR_SOCK" "$SERIAL_LOG" "$SCREEN_PPM" <<'PYEOF'
+python3 - "$MONITOR_SOCK" "$SERIAL_LOG" "$SCREEN_PPM" "$SCREEN_PPM_AFTER" <<'PYEOF'
 import socket, sys, time
 
-mon_path, serial_log, screen_ppm = sys.argv[1], sys.argv[2], sys.argv[3]
+mon_path, serial_log, screen_ppm, screen_ppm_after = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 # Wait for the shell prompt -- proves every boot-time self-test
 # (including the display server/client demo, which runs well before
@@ -82,6 +90,36 @@ def send(cmd, wait=0.4):
     s.recv(65536)
 
 send("screendump " + screen_ppm, 0.6)
+
+# Cursor starts centered ((screen_w/2, screen_h/2), kernel/drivers/
+# cursor.c's own cursor_init()) -- move it to (120, 520), a point
+# strictly inside client A's own exclusive region ((100,500)-(299,649)
+# minus the (150,550)-(299,649) overlap with client B), then click.
+# Positive monitor dy = screen-down (test_framebuffer_selftest.sh's own
+# established convention for this exact injection technique).
+send("mouse_move -392 136", 0.3)
+send("mouse_button 1", 0.2)
+send("mouse_button 0", 0.2)
+
+# Real synchronization, not a guessed delay: don't screendump until the
+# server's own log line proves it actually finished recompositing.
+deadline = time.time() + 10
+while time.time() < deadline:
+    with open(serial_log, "r", errors="replace") as f:
+        if "[OK] display server: raised window 0x0" in f.read():
+            break
+    time.sleep(0.1)
+else:
+    sys.exit("display server never reported raising window 0 after the injected click")
+
+# Move the cursor back off of client A's canvas before the second
+# screendump -- its own solid 8x8 sprite is drawn ON TOP of whatever is
+# underneath it (kernel/drivers/cursor.c), and would otherwise cover
+# exactly 64 of client A's own pixels, an unrelated, already-proven
+# (Milestone 23) behavior this test isn't trying to re-verify.
+send("mouse_move 392 -136", 0.3)
+
+send("screendump " + screen_ppm_after, 0.6)
 send("quit", 0.3)
 s.close()
 PYEOF
@@ -110,6 +148,10 @@ check "[OK] display server: presented window 0x1"
 check "[OK] display server: all windows presented in z-order"
 check "[OK] display server self-test passed, sys_fb_present blitted 0x"
 check "kernel shell -- type 'help' for commands"
+check "[OK] display server: subscribed to hardware input events"
+check "[OK] display server: a second sys_input_subscribe correctly failed (already subscribed)"
+check "[OK] input router: routed a click to pid 0x"
+check "[OK] display server: raised window 0x0"
 
 # A [FAIL] line from either process would mean the ownership check or
 # the request/grant/present handshake itself broke, not just a pixel
@@ -136,15 +178,20 @@ if [ -z "$win0_line" ] || [ -z "$win1_line" ] || [ "$win0_line" -ge "$win1_line"
     fail=1
 fi
 
-# Ten processes total must be reaped this boot (Milestone 28/ADR 0028
+# Nine processes total must be reaped this boot (Milestone 28/ADR 0028
 # replaced the single Milestone 27 client with two, raising this from 9
-# to 10 -- see test_ipc_shm_selftest.sh's own identical assertion) --
-# and the leak self-test must still pass, proving BOTH clients' shared
-# canvas buffers (refcounted the same way Milestone 26's IPC demo
-# object already was) were fully freed, not leaked by either one.
+# to 10; Milestone 30/ADR 0030 LOWERED it back down, 10 to 9, once the
+# display server itself became persistent -- created before the
+# frame-leak baseline, see kernel/kernel.c -- and moved outside this
+# count, leaving only its two clients -- see
+# test_ipc_shm_selftest.sh's own identical assertion) -- and the leak
+# self-test must still pass (now against a baseline that itself
+# accounts for the server's own two permanently-held canvas buffers,
+# see kernel_main's own updated comment), proving BOTH clients' shared
+# canvas buffers were otherwise fully freed, not leaked by either one.
 reaped_count=$(grep -cF "exited and was reaped" "$SERIAL_LOG" 2>/dev/null || true)
-if [ "$reaped_count" -ne 10 ]; then
-    echo "FAIL: expected exactly 10 'exited and was reaped' messages, got $reaped_count" >&2
+if [ "$reaped_count" -ne 9 ]; then
+    echo "FAIL: expected exactly 9 'exited and was reaped' messages, got $reaped_count" >&2
     fail=1
 fi
 check "[OK] process lifecycle self-test passed, "
@@ -173,7 +220,7 @@ fi
 # orange, not teal -- direct, pixel-level proof of z-order occlusion,
 # not just "both colors exist somewhere").
 if [ "$fail" -eq 0 ]; then
-    python3 - "$SCREEN_PPM" <<'PYEOF'
+    python3 - "$SCREEN_PPM" "$SCREEN_PPM_AFTER" <<'PYEOF'
 import sys
 
 def read_ppm(path):
@@ -284,6 +331,50 @@ for (x, y) in [(teal_x1, teal_y1), (orange_x0 + 50, orange_y0 + 50), (orange_x0,
         print(f"FAIL: expected orange (client B, on top of A in the overlap) at ({x},{y}), got {pixel_at(w, px, x, y)}", file=sys.stderr)
         fail = True
 
+# Milestone 30 (ADR 0030): the real, pixel-level proof a genuine click
+# actually raised a window. A second screendump, taken AFTER injecting
+# a real click on client A's own exclusive region (120, 520) and
+# waiting for the server's own "raised window 0x0" log line, must show
+# the EXACT MIRROR IMAGE of the first: client A (teal) now the full,
+# unbroken 200x150 rectangle, client B (orange) now reduced to the
+# L-shape -- the overlap region has genuinely changed owner, not just
+# "some pixels somewhere changed". Reuses the SAME (x0,x1) reference
+# geometry discovered from the FIRST screendump, since x is unaffected
+# by anything console-scroll-related and the windows themselves never
+# moved -- only which one is drawn on top changed.
+screen_ppm_after = sys.argv[2]
+aw, ah, apx = read_ppm(screen_ppm_after)
+
+after_teal_box = color_bbox(aw, ah, apx, is_teal)
+after_orange_box = color_bbox(aw, ah, apx, is_orange)
+if after_teal_box is None or after_orange_box is None:
+    print(f"FAIL: after the click, one of the two colors vanished entirely: teal={after_teal_box}, orange={after_orange_box}", file=sys.stderr)
+    fail = True
+else:
+    at_x0, at_y0, at_x1, at_y1, at_count = after_teal_box
+    ao_x0, ao_y0, ao_x1, ao_y1, ao_count = after_orange_box
+
+    if (at_x0, at_x1) != (teal_x0, teal_x1) or (at_y1 - at_y0 + 1) != 150 or at_count != 200 * 150:
+        print(f"FAIL: after raising client A, its (teal) canvas is not the full unbroken rectangle: got {after_teal_box}", file=sys.stderr)
+        fail = True
+    if (ao_x0, ao_x1) != (orange_x0, orange_x1) or (ao_y1 - ao_y0 + 1) != 150 or ao_count != expected_teal_count:
+        print(f"FAIL: after raising client A, client B's (orange) canvas is not reduced to the expected L-shape: got {after_orange_box}, expected {expected_teal_count} pixels", file=sys.stderr)
+        fail = True
+
+    # The direct proof: the overlap point that was ORANGE in the first
+    # screendump (client B on top) must now be TEAL (client A raised on
+    # top) -- and client B's own exclusive corner (never covered by A
+    # at all, regardless of z-order) must still be orange, proving this
+    # is a real reordering, not client B simply vanishing.
+    overlap_point = (orange_x0 + 50, orange_y0 + 50)
+    if not is_teal(*pixel_at(aw, apx, *overlap_point)):
+        print(f"FAIL: expected teal (client A, now raised on top of B) at {overlap_point} after the click, got {pixel_at(aw, apx, *overlap_point)}", file=sys.stderr)
+        fail = True
+    b_exclusive_point = (ao_x1, ao_y1)
+    if not is_orange(*pixel_at(aw, apx, *b_exclusive_point)):
+        print(f"FAIL: expected orange (client B's own exclusive corner, untouched by the raise) at {b_exclusive_point}, got {pixel_at(aw, apx, *b_exclusive_point)}", file=sys.stderr)
+        fail = True
+
 sys.exit(1 if fail else 0)
 PYEOF
     if [ $? -ne 0 ]; then
@@ -297,4 +388,4 @@ if [ "$fail" -ne 0 ]; then
     exit 1
 fi
 
-echo "PASS: two windows composited in the exact expected bound-enforced sizes/positions, with the correct z-order (client B on top of client A in the overlap)"
+echo "PASS: two windows composited in the exact expected bound-enforced sizes/positions with the correct initial z-order, and a real injected click genuinely raised client A above client B"

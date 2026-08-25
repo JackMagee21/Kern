@@ -55,7 +55,7 @@ ASM_SOURCES := kernel/arch/x86_64/boot.asm kernel/arch/x86_64/gdt_flush.asm kern
                kernel/user/embed/exec_demo_blob.asm kernel/user/embed/exec_target_blob.asm \
                kernel/user/embed/ipc_sender_blob.asm kernel/user/embed/ipc_receiver_blob.asm \
                kernel/user/embed/display_server_blob.asm kernel/user/embed/display_client_a_blob.asm \
-               kernel/user/embed/display_client_b_blob.asm kernel/user/embed/input_focus_demo_blob.asm
+               kernel/user/embed/display_client_b_blob.asm
 
 C_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
 ASM_OBJECTS := $(patsubst %.asm,$(BUILD_DIR)/%.o,$(ASM_SOURCES))
@@ -92,8 +92,6 @@ DISPLAY_CLIENT_A_ELF := $(BUILD_DIR)/kernel/user/display_client_a.elf
 DISPLAY_CLIENT_A_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/display_client_a_blob.o
 DISPLAY_CLIENT_B_ELF := $(BUILD_DIR)/kernel/user/display_client_b.elf
 DISPLAY_CLIENT_B_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/display_client_b_blob.o
-INPUT_FOCUS_DEMO_ELF := $(BUILD_DIR)/kernel/user/input_focus_demo.elf
-INPUT_FOCUS_DEMO_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/input_focus_demo_blob.o
 
 # Milestone 24: the minimal userspace C runtime (Desktop.md) -- crt0
 # (asm, built via the ordinary $(BUILD_DIR)/%.o: %.asm rule below) plus
@@ -110,8 +108,7 @@ USER_RT_OBJECTS := $(USER_RT_ASM_OBJECTS) $(USER_RT_C_OBJECTS)
 # runtime works (Desktop.md); the GUI arc's window server/apps join
 # this list as their own milestones land.
 USER_C_SOURCES := $(USER_RT_C_SOURCES) kernel/user/hello.c kernel/user/ipc_sender.c kernel/user/ipc_receiver.c \
-                   kernel/user/display_server.c kernel/user/display_client_a.c kernel/user/display_client_b.c \
-                   kernel/user/input_focus_demo.c
+                   kernel/user/display_server.c kernel/user/display_client_a.c kernel/user/display_client_b.c
 USER_C_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(USER_C_SOURCES))
 
 .PHONY: all run debug clean check-mb2
@@ -144,7 +141,6 @@ $(IPC_RECEIVER_BLOB_OBJ): $(IPC_RECEIVER_ELF)
 $(DISPLAY_SERVER_BLOB_OBJ): $(DISPLAY_SERVER_ELF)
 $(DISPLAY_CLIENT_A_BLOB_OBJ): $(DISPLAY_CLIENT_A_ELF)
 $(DISPLAY_CLIENT_B_BLOB_OBJ): $(DISPLAY_CLIENT_B_ELF)
-$(INPUT_FOCUS_DEMO_BLOB_OBJ): $(INPUT_FOCUS_DEMO_ELF)
 
 $(BUILD_DIR)/%.o: %.asm
 	@mkdir -p $(dir $@)
@@ -185,10 +181,6 @@ $(DISPLAY_CLIENT_A_ELF): $(BUILD_DIR)/kernel/user/display_client_a.o $(USER_RT_O
 $(DISPLAY_CLIENT_B_ELF): $(BUILD_DIR)/kernel/user/display_client_b.o $(USER_RT_OBJECTS) kernel/user/user.ld
 	@mkdir -p $(dir $@)
 	$(LD) -T kernel/user/user.ld --nostdlib -o $@ $(USER_RT_OBJECTS) $(BUILD_DIR)/kernel/user/display_client_b.o
-
-$(INPUT_FOCUS_DEMO_ELF): $(BUILD_DIR)/kernel/user/input_focus_demo.o $(USER_RT_OBJECTS) kernel/user/user.ld
-	@mkdir -p $(dir $@)
-	$(LD) -T kernel/user/user.ld --nostdlib -o $@ $(USER_RT_OBJECTS) $(BUILD_DIR)/kernel/user/input_focus_demo.o
 
 $(KERNEL_ELF): $(OBJECTS) boot/linker.ld
 	$(CC) $(LDFLAGS) $(OBJECTS) -o $@ -lgcc

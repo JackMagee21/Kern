@@ -1562,18 +1562,72 @@ anything that acts on it visually — no window raises/focuses in
 response yet, that's `Desktop.md`'s own next arc item, building
 directly on this delivery path.
 
-## 30. Window chrome and basic widgets (sequence TBD)
+## 30. Real click-driven window raising, and scroll-immune windows
 
-Milestone 30 is intentionally left as a one-line placeholder here — full
+Wires Milestone 29's click-delivery mechanism into an actual visible
+effect for the first time: `kernel/user/display_server.c` redesigned
+from "serve N clients then exit" (Milestones 27/28) into a genuinely
+persistent process that raises a window in response to a real click.
+
+**Deliverables:**
+- `display_server.c` retired Milestone 29's standalone
+  `input_focus_demo.c` (an unresolvable subscription-exclusivity
+  conflict otherwise) and became the real input subscriber itself,
+  moved to be created before `kernel_main`'s frame-leak baseline (never
+  exits during a normal boot) — the first time the reap-count self-test
+  gate has ever LOWERED (10 → 9), not raised.
+- A real hit-test (topmost z-order position first) + a 2-element
+  z-order swap on raise, recompositing via the exact same "opaque
+  windows, painted bottom-to-top" reasoning Milestone 28 already
+  established — no new compositing machinery.
+- **The real fix for Milestone 28's own flagged, deferred gap** (ADR
+  0028's Known limitations: windows drifting from console scroll) —
+  which THIS milestone's own hit-testing turned into a genuine
+  functional bug, not just cosmetic drift. `fb_scroll_up()`
+  (`kernel/drivers/framebuffer.c`) gained a `region_height` parameter;
+  `fbconsole.c` now reserves a fixed 480px region for console text;
+  windows relocated to y ≥ 480, permanently outside the scroll's reach.
+- **Two more real bugs found via direct evidence while verifying the
+  above, neither planned in advance:** `draw_glyph()` corrupting the
+  cursor sprite (no `cursor_hide()`/`cursor_show()` awareness at all);
+  and the actual root cause of a real screendump-visible corruption —
+  `console_putc()`'s shared cursor state has NO mutual exclusion
+  against preemption, so two ring-3 processes' interleaved `sys_write()`
+  calls could genuinely corrupt it once enough processes existed to
+  make the race likely. Fixed with a short, save/restore-flags
+  interrupt-disabled critical section (the same idiom
+  `scheduler_wake()` established, Milestone 25), not a bare `cli`/`sti`.
+**Verification:** `make run` boots and prints every Milestone 1-29
+marker unchanged plus the server's own subscribe markers.
+**The real proof is a second screendump:** `tests/qemu/test_display_server_selftest.sh`
+(substantially rewritten) injects a real click onto client A's own
+exclusive region, waits for the server's own "raised window" log line,
+then confirms via a SECOND QEMU screendump that the overlap region
+genuinely flips from client B's color to client A's — client A now the
+full unbroken rectangle, client B reduced to the L-shape Milestone 28's
+own technique already established for the opposite direction.
+`-d int,cpu_reset` trace unchanged. All twenty-five other smoke tests
+and all four host suites pass. Reap count lowered 10 → 9, with the
+process-lifecycle self-test now checking an exact, DERIVED (not
+hand-waved) 60-page deficit for the server's own two permanently-held
+canvas references, verified against real captured frame counts before
+being hardcoded.
+**Design record:** `docs/adr/0030-window-raising-and-scroll-immune-windows.md`.
+**Known limitations (accepted for this milestone only):** still exactly
+two clients, fixed cascade placement, no dynamic window list/move/
+close/chrome/widgets yet (`Desktop.md`'s own next arc item). No drag,
+no close, no keyboard focus routing. The console's reserved height
+(480px) is a fixed constant, not derived from actual boot text volume.
+
+## 31. Window chrome and basic widgets (sequence TBD)
+
+Milestone 31 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
-in sequence per `Desktop.md`'s GUI arc: using Milestone 29's own click
-delivery to actually raise/focus a window in `kernel/user/display_server.c`
-(a real redesign of its lifecycle from "serve N clients then exit" to a
-persistent event loop), then draggable/closable title bars and at least
-one interactive widget, then real applications. See `Desktop.md` for
-the full sequencing and `future.md` for the rest of this project's
-continuation briefing. Separately, still awaiting the user's decision:
-a disk driver + real filesystem, ACPI-based shutdown, and SMP/
-networking, all explicitly flagged non-goals.
+in sequence per `Desktop.md`'s GUI arc: draggable/closable title bars
+and at least one interactive widget, then real applications. See
+`Desktop.md` for the full sequencing and `future.md` for the rest of
+this project's continuation briefing. Separately, still awaiting the
+user's decision: a disk driver + real filesystem, ACPI-based shutdown,
+and SMP/networking, all explicitly flagged non-goals.

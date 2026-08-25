@@ -144,21 +144,24 @@ void fb_read_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t *out)
     }
 }
 
-void fb_scroll_up(uint32_t rows, uint32_t fill_color)
+void fb_scroll_up(uint32_t rows, uint32_t fill_color, uint32_t region_height)
 {
     if (!fb_ready) {
         return;
     }
-    if (rows >= fb_height) {
-        fb_fill_rect(0, 0, fb_width, fb_height, fill_color);
+    if (region_height > fb_height) {
+        region_height = fb_height;
+    }
+    if (rows >= region_height) {
+        fb_fill_rect(0, 0, fb_width, region_height, fill_color);
         return;
     }
-    for (uint32_t y = 0; y < fb_height - rows; y++) {
+    for (uint32_t y = 0; y < region_height - rows; y++) {
         uint8_t *dst = fb_base + (uint64_t)y * fb_pitch;
         const uint8_t *src = fb_base + (uint64_t)(y + rows) * fb_pitch;
         for (uint32_t b = 0; b < fb_pitch; b++) {
             dst[b] = src[b];
         }
     }
-    fb_fill_rect(0, fb_height - rows, fb_width, rows, fill_color);
+    fb_fill_rect(0, region_height - rows, fb_width, rows, fill_color);
 }
