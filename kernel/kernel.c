@@ -44,6 +44,8 @@ extern const uint8_t display_client_a_image_start[]; /* kernel/user/embed/displa
 extern const uint8_t display_client_a_image_end[];
 extern const uint8_t display_client_b_image_start[]; /* kernel/user/embed/display_client_b_blob.asm: embedded build/kernel/user/display_client_b.elf */
 extern const uint8_t display_client_b_image_end[];
+extern const uint8_t input_focus_demo_image_start[]; /* kernel/user/embed/input_focus_demo_blob.asm: embedded build/kernel/user/input_focus_demo.elf */
+extern const uint8_t input_focus_demo_image_end[];
 
 /* Milestone 6 self-test: two kernel threads that never voluntarily
    yield, proving the scheduler forcibly preempts a task that never
@@ -266,7 +268,11 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        (below) is what makes it actually move. */
     fb_init(mbi_addr);
     fbconsole_init();
-    console_write("[OK] graphics framebuffer console initialized\n");
+    console_write("[OK] graphics framebuffer console initialized, 0x");
+    console_write_hex(fb_get_width());
+    console_write(" x 0x");
+    console_write_hex(fb_get_height());
+    console_write("\n");
     cursor_init();
 
     heap_init();
@@ -414,6 +420,34 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
         panic("guard page self-test failed: kernel stack's guard page is mapped");
     }
     console_write("[OK] guard page self-test passed (kernel stack guard page is unmapped)\n");
+
+    /* Milestone 29 (ADR 0029): the input-focus demo, created HERE --
+       before the frame-leak baseline just below, alongside the
+       permanent kernel threads (demo_task_a/b, block_test_blocker/
+       waker), NOT alongside every other ring-3 demo process further
+       down (which all run bounded, exit on their own, and are counted
+       in the reap-count/leak-check gate below). This one is
+       deliberately different: it blocks FOREVER waiting for a REAL
+       external mouse click (kernel/drivers/cursor.c's own edge
+       detection, driven by an actual IRQ12 report) that a plain
+       headless boot with no QEMU monitor injection will never send --
+       same steady-state as the shell itself waiting on keyboard input,
+       not a hang. If it were created AFTER the baseline below (like
+       every other demo process) and counted in that gate's target,
+       EVERY OTHER smoke test that doesn't specifically inject a click
+       would hang forever waiting for a reap that can't happen without
+       external input -- creating it here, before the baseline, bakes
+       its own frame footprint into what's being compared FROM, so
+       the leak check only ever validates the OTHER, self-contained
+       demos' full teardown, exactly as before this milestone. Its own
+       actual behavior (subscribe, prove exclusivity, then genuinely
+       block) only runs once preemption starts (interrupts are still
+       off here) -- see kernel/user/input_focus_demo.c. */
+    task_t *input_focus_demo_process = task_create_user_image(input_focus_demo_image_start, input_focus_demo_image_end);
+    scheduler_add_task(input_focus_demo_process);
+    console_write("[OK] input focus demo process created, pid 0x");
+    console_write_hex(input_focus_demo_process->id);
+    console_write(" (blocks for a real injected click -- see tests/qemu/test_input_focus_selftest.sh)\n");
 
     /* Milestone 10 (ADR 0010) self-test setup: captured BEFORE either
        process exists, so that once both have exited and been fully

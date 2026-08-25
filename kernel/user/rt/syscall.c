@@ -109,3 +109,8 @@ uint64_t sys_fb_present(uint64_t x, uint64_t y, uint64_t w, uint64_t h, const vo
 {
     return syscall5(11, x, y, w, h, (uint64_t)(uintptr_t)buf);
 }
+
+uint64_t sys_input_subscribe(void)
+{
+    return syscall2(12, 0, 0);
+}

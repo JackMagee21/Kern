@@ -3,6 +3,7 @@
 #include "cursor.h"
 #include "framebuffer.h"
 #include "mouse.h"
+#include "input_router.h"
 
 #define CURSOR_SIZE 8u
 
@@ -32,6 +33,14 @@ static uint32_t saved_pixels[CURSOR_SIZE * CURSOR_SIZE];
    (ADR 0023), not a new one. */
 static int cursor_ready;
 static int cursor_visible;
+/* Milestone 29 (ADR 0029): the PS/2 `left` field is a LEVEL (the
+   button's current physical state, per report), not an edge -- this
+   driver is the one place that turns it into a genuine click
+   transition (false -> true), since it's already the only consumer
+   that sees every mouse report's button state alongside the
+   authoritative on-screen cursor position a click needs to be
+   reported at. */
+static int left_was_down;
 
 static void erase_at_current(void)
 {
@@ -108,6 +117,7 @@ void cursor_poll(void)
     int32_t new_x = (int32_t)cursor_x;
     int32_t new_y = (int32_t)cursor_y;
     int moved = 0;
+    int click_detected = 0; /* Milestone 29: at most one routed click per poll, even if several packets batched together this round -- see cursor.h's own doc comment */
 
     while (mouse_has_cursor_event()) {
         mouse_event_t event = mouse_get_cursor_event();
@@ -118,6 +128,11 @@ void cursor_poll(void)
            sign convention. Negated here, nowhere else. */
         new_y -= event.dy;
         moved = 1;
+
+        if (event.left && !left_was_down) {
+            click_detected = 1;
+        }
+        left_was_down = event.left;
     }
     if (!moved) {
         return;
@@ -140,4 +155,13 @@ void cursor_poll(void)
     cursor_x = (uint32_t)new_x;
     cursor_y = (uint32_t)new_y;
     draw_at_current();
+
+    /* Milestone 29 (ADR 0029): reported AFTER cursor_x/cursor_y are
+       finalized (clamped, assigned, and actually redrawn) -- the exact
+       position a click is routed at always matches what's visually
+       true on screen at that moment, not a possibly-unclamped
+       mid-batch value. */
+    if (click_detected) {
+        input_router_notify_click(cursor_x, cursor_y);
+    }
 }

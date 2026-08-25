@@ -410,6 +410,33 @@ static void sys_fb_present(syscall_frame_t *frame)
     frame->rax = 0;
 }
 
+/* Milestone 29 (ADR 0029): the pid currently subscribed to receive
+   real hardware input events, or 0. Deliberately a SEPARATE global
+   from fb_owner_pid (above) -- "who owns the framebuffer" and "who
+   should receive input events" are, in general, different questions
+   (a future window manager might route input through a different
+   process than the one that owns the pixels), even though this
+   milestone's own demo happens to be the only subscriber that will
+   ever exist. Same exclusivity semantics as sys_fb_acquire(): succeeds
+   exactly once, ever, for the whole boot; every later call, including
+   a repeat call from the SAME process, fails. */
+static uint32_t input_focus_pid;
+
+static void sys_input_subscribe(syscall_frame_t *frame)
+{
+    if (input_focus_pid != 0) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+    input_focus_pid = scheduler_current_task()->id;
+    frame->rax = 0;
+}
+
+uint32_t syscall_get_input_focus_pid(void)
+{
+    return input_focus_pid;
+}
+
 void syscall_dispatch(syscall_frame_t *frame)
 {
     syscall_count++;
@@ -450,6 +477,9 @@ void syscall_dispatch(syscall_frame_t *frame)
         break;
     case SYS_FB_PRESENT:
         sys_fb_present(frame);
+        break;
+    case SYS_INPUT_SUBSCRIBE:
+        sys_input_subscribe(frame);
         break;
     default:
         frame->rax = (uint64_t)-1;

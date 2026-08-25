@@ -1499,19 +1499,81 @@ surface, and no "please redraw yourself" protocol for a ring-3 window
 owner) worth a dedicated fix before window chrome/interactivity makes
 a visibly drifting window user-facing, not just a test inconvenience.
 
-## 29. Real input-driven window focus (routing clicks to a process) (sequence TBD)
+## 29. Real input-driven click routing (hardware event → userspace IPC)
 
-Milestone 29 is intentionally left as a one-line placeholder here — full
+Sixth step of the GUI arc (`Desktop.md`) — the genuinely-new-subsystem
+half of the milestone 5 arc item Milestone 28 deliberately split in
+two: delivering a real hardware input event to a ring-3 process at
+all, something nothing in this kernel had ever done before (every
+prior mouse-event consumer was kernel-side code).
+
+**Deliverables:**
+- `kernel/arch/x86_64/syscall.h/.c`: `SYS_INPUT_SUBSCRIBE` — registers
+  the calling process as the sole recipient of routed input events.
+  Kernel-enforced exclusivity, same pattern as `SYS_FB_ACQUIRE`
+  (Milestone 27) but a deliberately SEPARATE global (`input_focus_pid`,
+  not `fb_owner_pid`) — "who owns the framebuffer" and "who receives
+  input" are different questions, even though this milestone's own
+  demo happens to answer both the same way.
+- `kernel/drivers/input_router.c`/`.h` (new): `input_router_notify_click()`
+  looks up the current subscriber and delivers an `INPUT_EVENT_CLICK`
+  (`kernel/user/input_protocol.h`, new) via the EXISTING
+  `ipc_send()` mechanism (Milestone 26) — no new IPC machinery.
+- `kernel/drivers/cursor.c` extended to detect a genuine left-click
+  EDGE (the PS/2 wire format only ever reports a level, not a
+  transition) and call the router at the cursor's own, already-tracked
+  on-screen position — the natural place, since it already sees every
+  event's button state.
+- `kernel/user/input_focus_demo.c` (new): subscribes, proves
+  exclusivity (a second subscribe attempt fails, mirroring
+  `sys_fb_acquire()`'s own self-check), then blocks for exactly one
+  real click and exits.
+**A real structural conflict found and fixed in review, before ever
+booting:** a process that blocks forever for external input cannot be
+part of `kernel_main`'s own deterministic reap-count self-test gate —
+every other headless test (no monitor injection) would hang forever
+waiting for a reap that can't happen. Fixed by creating the demo
+BEFORE the frame-leak baseline snapshot, alongside the permanent kernel
+threads rather than the bounded demo processes, so neither the
+reap-count gate nor the leak check ever depends on it exiting during a
+normal boot.
+**Verification:** `make run` boots and prints every Milestone 1-28
+marker unchanged, plus the demo's own subscribe/exclusivity markers,
+with the demo then sitting harmlessly blocked for the rest of a normal
+boot (confirmed: every pre-existing test still shows exactly 10 reaps,
+unchanged). `tests/qemu/test_input_focus_selftest.sh` (new) injects a
+REAL `mouse_move`/`mouse_button` through the QEMU monitor (Milestones
+16/23's own technique) and confirms the routed click lands at the
+EXACT expected screen position (read from the framebuffer's own
+self-reported negotiated dimensions, not hardcoded), the demo receives
+it, and it then exits (11 reaps — the baseline 10 plus this one).
+`-d int,cpu_reset` trace unchanged from Milestone 28. All twenty-six
+other smoke tests and all four host suites pass. Deliberately NO
+`kernel_main` panic-on-zero self-test for click delivery (unlike every
+other "prove the path was exercised" counter this project has added) —
+nothing in this kernel can synthesize a real click from inside
+`kernel_main` itself, so such a check would break every headless test
+that doesn't happen to inject one.
+**Design record:** `docs/adr/0029-real-input-driven-click-routing.md`.
+**Known limitations (accepted for this milestone only):** exactly one
+subscriber, ever, for the whole boot, never released; only left-click
+DOWN edges, no release/drag/right/middle button. Not yet wired to
+anything that acts on it visually — no window raises/focuses in
+response yet, that's `Desktop.md`'s own next arc item, building
+directly on this delivery path.
+
+## 30. Window chrome and basic widgets (sequence TBD)
+
+Milestone 30 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
-in sequence per `Desktop.md`'s GUI arc: a genuinely new subsystem —
-routing a real hardware input event (a mouse click; the cursor
-currently only tracks movement, buttons aren't wired to anything) from
-the kernel's own PS/2 driver to a specific ring-3 process via IPC, then
-using that to raise/focus whichever window was clicked — before window
-chrome/widgets, then real apps. See `Desktop.md` for the full
-sequencing and `future.md` for the rest of this project's continuation
-briefing. Separately, still awaiting the user's decision: a disk driver
-+ real filesystem, ACPI-based shutdown, and SMP/networking, all
-explicitly flagged non-goals.
+in sequence per `Desktop.md`'s GUI arc: using Milestone 29's own click
+delivery to actually raise/focus a window in `kernel/user/display_server.c`
+(a real redesign of its lifecycle from "serve N clients then exit" to a
+persistent event loop), then draggable/closable title bars and at least
+one interactive widget, then real applications. See `Desktop.md` for
+the full sequencing and `future.md` for the rest of this project's
+continuation briefing. Separately, still awaiting the user's decision:
+a disk driver + real filesystem, ACPI-based shutdown, and SMP/
+networking, all explicitly flagged non-goals.

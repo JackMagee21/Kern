@@ -32,6 +32,7 @@ typedef struct __attribute__((packed)) {
 #define SYS_SHM_MAP    9
 #define SYS_FB_ACQUIRE 10
 #define SYS_FB_PRESENT 11
+#define SYS_INPUT_SUBSCRIBE 12
 
 /* Programs STAR/LSTAR/SFMASK and sets EFER.SCE. Must run after
    gdt_init() (STAR encodes GDT selector offsets) and tss_init().
@@ -103,6 +104,16 @@ uint64_t syscall_get_ipc_recv_block_count(void);
    syscall_get_exec_count()/syscall_get_ipc_recv_block_count() already
    established. */
 uint64_t syscall_get_fb_present_count(void);
+
+/* Milestone 29 (ADR 0029): the pid currently subscribed to receive
+   real hardware input events (INPUT_EVENT_CLICK, kernel/user/
+   input_protocol.h), or 0 if nobody has subscribed yet -- consulted by
+   kernel/drivers/input_router.c on every genuine mouse-click edge, the
+   same "kernel-enforced single owner, checked by pid" pattern
+   sys_fb_acquire()'s own fb_owner_pid already established (Milestone
+   27), deliberately kept as its OWN separate concern rather than
+   reusing fb_owner_pid directly -- see ADR 0029's Decision for why. */
+uint32_t syscall_get_input_focus_pid(void);
 
 /* Milestone 18 (ADR 0018); storage moved to the current task itself in
    Milestone 20 (ADR 0020) -- the calling process's user-mode RSP at the

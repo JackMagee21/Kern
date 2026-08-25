@@ -56,4 +56,12 @@ uint64_t sys_fb_acquire(void);
    large, or buf isn't a fully validated user range for w*h*4 bytes). */
 uint64_t sys_fb_present(uint64_t x, uint64_t y, uint64_t w, uint64_t h, const void *buf);
 
+/* Milestone 29 (ADR 0029): registers the caller as the sole recipient
+   of real hardware input events (kernel/drivers/input_router.c) --
+   succeeds exactly once, ever, for the whole boot; the FIRST caller
+   (any process) wins, every later call (including a repeat call from
+   the SAME process) fails. Returns 0 on success, (uint64_t)-1 on
+   failure. */
+uint64_t sys_input_subscribe(void);
+
 #endif /* KERNEL_USER_RT_SYSCALL_H */

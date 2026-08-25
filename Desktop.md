@@ -143,12 +143,28 @@ each one is needed now, not a deliverables list.
      Windows THEMSELVES are still not immune to this -- an explicitly
      flagged, not-yet-fixed limitation (see ADR 0028) worth addressing
      before chrome/interactivity makes a drifting window user-facing.
-   - **5b. Real input-driven window focus -- not started.** Routing an
-     actual hardware mouse click from `kernel/drivers/mouse.c` to
-     whichever ring-3 window process was clicked, and using that to
-     raise/focus it. Its own milestone (`docs/roadmap.md`'s 29).
+   - **5b. Real click delivery -- DONE (Milestone 29, ADR 0029).** A
+     genuine PS/2 left-click (a real IRQ12 report, decoded by
+     `kernel/drivers/mouse.c`) is routed via IPC
+     (`kernel/drivers/input_router.c`, new `SYS_INPUT_SUBSCRIBE`
+     syscall) to a specific ring-3 process -- the first hardware event
+     this kernel has ever delivered to userspace. Proven in isolation
+     with a small dedicated demo, NOT yet wired to
+     `display_server.c` actually raising the clicked window -- that
+     needs redesigning the server's own lifecycle (from "serve N
+     clients then exit" to a persistent event loop), pushed into
+     milestone 6 below instead of its own milestone. A real structural
+     conflict (a process blocking forever for external input can't be
+     part of `kernel_main`'s own deterministic reap-count gate, or every
+     OTHER test would hang) was found and fixed in review before ever
+     booting.
 6. **Window chrome and basic widgets.** Draggable/closable title bars,
-   at least one interactive control. This is where it starts feeling
+   at least one interactive control -- and now also where milestone
+   5b's click-delivery mechanism actually gets ACTED on for the first
+   time: `display_server.c` needs a real persistent event loop (a
+   genuine redesign from its current "serve N clients then exit"
+   shape) before raising a clicked window means anything. This is where
+   it starts feeling
    like a desktop rather than a windowing demo.
 7. **Real applications.** A small number of genuinely different
    programs (not just tech-demo processes) — candidates: a clock, a
