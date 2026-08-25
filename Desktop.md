@@ -106,8 +106,8 @@ each one is needed now, not a deliverables list.
    (Milestone 27, ADR 0027).** One server process
    (`kernel/user/display_server.c`) claims sole ownership of the real
    framebuffer via a new kernel-ENFORCED syscall (`SYS_FB_ACQUIRE`,
-   succeeds exactly once ever, checked by pid); the client
-   (`kernel/user/display_client.c`) asks for a 400x300 canvas over a
+   succeeds exactly once ever, checked by pid); the client (since
+   extended into two, Milestone 28) asks for a 400x300 canvas over a
    tiny protocol built entirely on Milestone 26's existing IPC/shm
    mechanism, and the server's own fixed policy grants only 200x150 —
    "the server enforces the bound" turned out to mean a userspace
@@ -119,10 +119,34 @@ each one is needed now, not a deliverables list.
    design question, including why Milestone 26's own scheduling-order
    bug class couldn't recur here, was reasoned through in review before
    ever running QEMU.
-5. **Multiple windows: z-order, damage tracking, input focus.** Window
-   list, routing keyboard/mouse events (including clicks — the cursor
-   currently only tracks movement, buttons aren't wired to anything)
-   to whichever window is focused.
+5. **Multiple windows: z-order, damage tracking, input focus.** Written
+   here as one item, before any of it was built; split in practice once
+   implementation started (CLAUDE.md: one subsystem per change) --
+   real click-driven input routing turned out to be genuinely separate,
+   unbuilt subsystem work (delivering a hardware event to a ring-3
+   process via IPC, nothing in this kernel does that yet), not just an
+   extension of the compositing protocol.
+   - **5a. Z-order compositing -- DONE (Milestone 28, ADR 0028).**
+     Extended the single client into two (`display_client_a.c`/`_b.c`),
+     cascaded so their canvases genuinely overlap; correct z-order
+     needed no new compositing machinery, just strict presentation
+     order (both windows are fully opaque). A new `DISPLAY_OP_ACK`
+     closed a real causality gap the first draft had (`sys_ipc_send()`
+     only proves a message was enqueued, never processed). Found two
+     real bugs neither planned in advance -- the smoke test's hardcoded
+     absolute screen coordinates broke because `fb_scroll_up()` shifts
+     the WHOLE framebuffer (already-drawn windows included) once this
+     milestone's own extra boot output crossed a scroll threshold no
+     earlier milestone reached; the SAME extra scroll exposed a
+     genuine, pre-existing ghost-trail bug in Milestone 23's mouse
+     cursor, fixed with new `cursor_hide()`/`cursor_show()` functions.
+     Windows THEMSELVES are still not immune to this -- an explicitly
+     flagged, not-yet-fixed limitation (see ADR 0028) worth addressing
+     before chrome/interactivity makes a drifting window user-facing.
+   - **5b. Real input-driven window focus -- not started.** Routing an
+     actual hardware mouse click from `kernel/drivers/mouse.c` to
+     whichever ring-3 window process was clicked, and using that to
+     raise/focus it. Its own milestone (`docs/roadmap.md`'s 29).
 6. **Window chrome and basic widgets.** Draggable/closable title bars,
    at least one interactive control. This is where it starts feeling
    like a desktop rather than a windowing demo.

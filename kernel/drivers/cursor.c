@@ -10,11 +10,32 @@ static uint32_t cursor_x;
 static uint32_t cursor_y;
 static uint32_t cursor_color;
 static uint32_t saved_pixels[CURSOR_SIZE * CURSOR_SIZE];
-static int cursor_drawn;
+/* Milestone 28 (ADR 0028): split from the single old "cursor_drawn"
+   flag into two, after a real ghost-trail bug found via
+   test_framebuffer_selftest.sh once Milestone 28's own extra boot-time
+   console output pushed fbconsole.c's scroll() past a threshold it
+   hadn't crossed before. cursor_ready: true once cursor_init() has
+   run (this driver's own "am I usable at all yet" guard, same
+   role the old flag partly played). cursor_visible: true iff the
+   sprite is CURRENTLY actually rendered on screen right now -- false
+   between a cursor_hide() and the next cursor_show()/cursor_poll()
+   redraw. The distinction matters because cursor_hide()/cursor_show()
+   (below) can now be called from OUTSIDE this file entirely, wrapped
+   around fbconsole.c's own fb_scroll_up() call: erase_at_current()'s
+   saved_pixels restore is only ever valid PIXEL DATA nobody else has
+   touched since -- fb_scroll_up() shifts the ENTIRE framebuffer,
+   including whatever's under an on-screen cursor sprite, so restoring
+   stale saved_pixels AFTER a scroll (or drawing a "new" sprite without
+   first erasing the OLD one, now sitting at a visually wrong spot)
+   corrupts the display exactly the way this bug did -- caught by
+   test_framebuffer_selftest.sh's own existing ghost-trail check
+   (ADR 0023), not a new one. */
+static int cursor_ready;
+static int cursor_visible;
 
 static void erase_at_current(void)
 {
-    if (!cursor_drawn) {
+    if (!cursor_visible) {
         return;
     }
     for (uint32_t y = 0; y < CURSOR_SIZE; y++) {
@@ -22,13 +43,14 @@ static void erase_at_current(void)
             fb_put_pixel(cursor_x + x, cursor_y + y, saved_pixels[y * CURSOR_SIZE + x]);
         }
     }
+    cursor_visible = 0;
 }
 
 static void draw_at_current(void)
 {
     fb_read_rect(cursor_x, cursor_y, CURSOR_SIZE, CURSOR_SIZE, saved_pixels);
     fb_fill_rect(cursor_x, cursor_y, CURSOR_SIZE, CURSOR_SIZE, cursor_color);
-    cursor_drawn = 1;
+    cursor_visible = 1;
 }
 
 void cursor_init(void)
@@ -38,6 +60,37 @@ void cursor_init(void)
     cursor_x = (fb_w > CURSOR_SIZE) ? (fb_w / 2) : 0;
     cursor_y = (fb_h > CURSOR_SIZE) ? (fb_h / 2) : 0;
     cursor_color = fb_pack_color(0xff, 0x00, 0x00); /* bright red -- unmistakable against console text */
+    cursor_ready = 1;
+    draw_at_current();
+}
+
+/* Milestone 28 (ADR 0028): erases the cursor sprite (restoring the
+   real pixels underneath it) if it's currently visible; a no-op
+   before cursor_init() has ever run, or if it's already hidden.
+   Callable from OUTSIDE this file -- fbconsole.c's own scroll() is the
+   first real caller, wrapping it around fb_scroll_up() so that bulk
+   operation never has to reason about a sprite sitting on top of the
+   content it's about to shift. */
+void cursor_hide(void)
+{
+    if (!cursor_ready) {
+        return;
+    }
+    erase_at_current();
+}
+
+/* Milestone 28 (ADR 0028): redraws the cursor sprite at its CURRENT
+   logical (cursor_x, cursor_y) -- unchanged by whatever happened while
+   it was hidden -- capturing a FRESH background via fb_read_rect()
+   first, so it composites correctly on top of whatever is actually
+   there now (e.g. the framebuffer content fb_scroll_up() just
+   shifted), not stale pre-hide data. A no-op before cursor_init() has
+   ever run. */
+void cursor_show(void)
+{
+    if (!cursor_ready) {
+        return;
+    }
     draw_at_current();
 }
 

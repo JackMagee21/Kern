@@ -24,4 +24,24 @@ void cursor_init(void);
    scheduling primitive. */
 void cursor_poll(void);
 
+/* Milestone 28 (ADR 0028): erases the cursor sprite (restoring the
+   real pixels underneath it) if currently visible; a no-op if it's
+   already hidden or cursor_init() hasn't run yet. Exists specifically
+   so a caller about to perform a BULK framebuffer operation that
+   doesn't know or care about the cursor (fbconsole.c's own
+   fb_scroll_up() call, the first real user) can make sure that
+   operation never has to reason about a sprite sitting on top of the
+   content it's about to shift -- restoring a save/restore buffer
+   AFTER such an operation, or leaving an old sprite un-erased at a
+   position the operation just invalidated, is exactly what a real
+   ghost-trail bug in this driver looked like before this existed (see
+   ADR 0028's Verification). Always pair with cursor_show() afterward. */
+void cursor_hide(void);
+
+/* Milestone 28 (ADR 0028): redraws the cursor sprite at its current
+   logical position, capturing a FRESH background first -- correct to
+   call any time after cursor_hide(), regardless of what changed on
+   screen in between. A no-op if cursor_init() hasn't run yet. */
+void cursor_show(void);
+
 #endif /* KERNEL_DRIVERS_CURSOR_H */

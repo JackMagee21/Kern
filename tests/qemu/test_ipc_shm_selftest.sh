@@ -78,7 +78,8 @@ fi
 
 # Seven processes total must be reaped this boot (Milestone 26/ADR 0026
 # added the sender and receiver, raising this from 5 to 7 (Milestone 27/
-# ADR 0027 raised it again, 7 to 9, for the display server demo) -- see
+# ADR 0027 raised it again, 7 to 9, for the display server demo;
+# Milestone 28/ADR 0028 raised it again, 9 to 10) -- see
 # test_process_lifecycle_selftest.sh's own identical assertion) -- and
 # the leak self-test must have passed, proving the shared object's
 # REFCOUNTED frame (kernel/mm/pmm.h's pmm_frame_addref()/
@@ -86,8 +87,8 @@ fi
 # ADR 0021) was only actually freed once BOTH mappers had exited, not
 # leaked by either one alone.
 reaped_count=$(grep -cF "exited and was reaped" "$SERIAL_LOG" 2>/dev/null || true)
-if [ "$reaped_count" -ne 9 ]; then
-    echo "FAIL: expected exactly 9 'exited and was reaped' messages, got $reaped_count" >&2
+if [ "$reaped_count" -ne 10 ]; then
+    echo "FAIL: expected exactly 10 'exited and was reaped' messages, got $reaped_count" >&2
     fail=1
 fi
 check "[OK] process lifecycle self-test passed, "

@@ -17,11 +17,11 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 27 (2026-08-25)
+## State as of Milestone 28 (2026-08-25)
 
 **GUI arc in progress** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
-with the user). Milestones 24-27 (below) are the first four steps.
+with the user). Milestones 24-28 (below) are the first five steps.
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -248,6 +248,31 @@ the design reasoning and any real bugs found along the way.
     design question (including a causal-ordering argument for why
     Milestone 26's own scheduling-order bug class couldn't recur here)
     was worked through in review before ever running QEMU. See ADR 0027.
+28. **Multiple windows and z-order compositing** — extended Milestone
+    27's server to two clients (`display_client_a.c`/`_b.c`), cascaded
+    so their canvases genuinely overlap; correct z-order needed no new
+    compositing machinery at all, just strict presentation order (both
+    windows are fully opaque). `Desktop.md`'s own milestone 5 originally
+    bundled this with real click-driven input focus; split those apart
+    deliberately (CLAUDE.md: one subsystem per change) since routing a
+    real hardware input event to a ring-3 process is genuinely separate,
+    unbuilt subsystem work — its own later milestone now. Found TWO
+    real bugs neither planned in advance: the smoke test's own
+    hardcoded absolute screen coordinates broke because
+    `fbconsole.c`'s `fb_scroll_up()` shifts the ENTIRE framebuffer
+    (already-drawn windows included) once this milestone's extra boot
+    output pushed a scroll threshold no earlier milestone had reached —
+    fixed the TEST to check geometry relative to the windows' own
+    discovered position; the SAME extra scroll exposed a genuine,
+    pre-existing ghost-trail bug in Milestone 23's mouse cursor
+    (`cursor.c` had no way to know a scroll had happened, so its next
+    redraw restored stale save/restore data) — fixed with new
+    `cursor_hide()`/`cursor_show()` functions wrapped around the
+    scroll call, a real cross-module coupling, not a workaround. See
+    ADR 0028 — including an explicitly flagged, NOT-yet-fixed
+    limitation: windows themselves (unlike the cursor) are still not
+    immune to later console scroll, a real architectural gap worth
+    addressing before chrome/interactivity makes it user-facing.
 
 **Testing state:** 26 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
@@ -257,14 +282,18 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** twenty-one
-milestones (9-27) all followed the same pattern — implement, boot in
+**A note on process discipline that held up well:** twenty-two
+milestones (9-28) all followed the same pattern — implement, boot in
 QEMU for real, fix what actually breaks, write the ADR describing what
 was tried and what was learned (including dead ends), commit in small
 logical pieces. Milestones 10-15, 17-19, 21-22, 24, and 27 all landed
 correctly on the first real boot; Milestone 9 (per-process address
 spaces), Milestone 16 (PS/2 mouse), Milestone 25 (blocking/wake
-primitive), and Milestone 26 (IPC/shm) each hit real bugs that needed
+primitive), Milestone 26 (IPC/shm), and Milestone 28 (multi-window
+z-order — its own demo logic booted clean, but exposed a real,
+pre-existing latent bug in Milestone 23's mouse cursor via a
+pre-existing test, not a new one written to find it) each hit real bugs
+that needed
 real diagnosis (not guessing) to fix — all are documented in detail in
 their ADRs (0009, 0016, 0025, 0026) specifically so the diagnostic
 *method*, not just the fix, is preserved for next time something in
@@ -338,12 +367,17 @@ signal CLAUDE.md asks for before this territory gets touched.
 ## Reasonable next steps (not flagged, not started)
 
 The main line of "what's next" is now `Desktop.md`'s GUI arc (Milestones
-24-27 done; Milestone 28 = multiple windows — a window list, z-order,
-damage tracking, and routing keyboard/mouse events, including clicks,
-to whichever window is focused — then chrome/widgets, then real apps).
-A real path-based `execve` remains blocked on the filesystem non-goal,
-which `Desktop.md`'s scope confirmation keeps deferred for this whole
-arc.
+24-28 done; Milestone 29 = real input-driven window focus — routing an
+actual hardware mouse click, via a new kernel-to-userspace IPC delivery
+mechanism, from `kernel/drivers/mouse.c` to whichever ring-3 window
+process was clicked — then chrome/widgets, then real apps). Also worth
+picking up alongside or before that: ADR 0028's own flagged, not-yet-fixed
+gap — windows currently drift if console text prints after they're
+drawn (fb_scroll_up() shifts the whole framebuffer; the mouse cursor was
+fixed the same way this milestone, but a ring-3 window has no equivalent
+"please redraw yourself" hook yet). A real path-based `execve` remains
+blocked on the filesystem non-goal, which `Desktop.md`'s scope
+confirmation keeps deferred for this whole arc.
 
 A few smaller items outside that arc, not touching a non-goal:
 

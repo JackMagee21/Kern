@@ -3,6 +3,7 @@
 #include "fbconsole.h"
 #include "framebuffer.h"
 #include "font8x8.h"
+#include "cursor.h"
 
 #define GLYPH_W 8u
 #define GLYPH_H 8u
@@ -36,9 +37,27 @@ static void draw_glyph(uint32_t col, uint32_t row, char c)
     }
 }
 
+/* Milestone 28 (ADR 0028): wrapped with cursor_hide()/cursor_show() --
+   a real bug, found via test_framebuffer_selftest.sh's own existing
+   ghost-trail check once Milestone 28's extra boot-time console output
+   pushed this scroll threshold past a point earlier milestones never
+   reached. fb_scroll_up() shifts the ENTIRE framebuffer, including
+   whatever's under an already-drawn cursor sprite; without hiding it
+   first, the cursor's own next erase/redraw (kernel/drivers/cursor.c)
+   would restore/composite against pixel data invalidated by this
+   shift, corrupting the display. This is fbconsole.c's own only
+   coupling to a specific consumer (cursor.c) -- deliberate, not
+   layering creep: cursor.c is the one thing besides console text that
+   can be sitting on the framebuffer at an arbitrary moment this
+   function has no other way to find out about. cursor_hide()/
+   cursor_show() are no-ops before cursor_init() has ever run, so this
+   is always safe to call unconditionally, even from console output
+   that happens before the mouse subsystem exists. */
 static void scroll(void)
 {
+    cursor_hide();
     fb_scroll_up(GLYPH_H, bg_color);
+    cursor_show();
 }
 
 void fbconsole_init(void)

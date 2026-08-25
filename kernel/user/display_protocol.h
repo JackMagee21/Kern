@@ -41,4 +41,31 @@
    unused. */
 #define DISPLAY_OP_PRESENT 3
 
+/* Milestone 28 (ADR 0028): client -> client (NOT server -- this is the
+   one message in this protocol two CLIENTS exchange directly with each
+   other over the same sys_ipc_send()/sys_ipc_recv() mechanism, proving
+   nothing about IPC restricts it to client<->server traffic). No
+   fields used. kernel/user/display_client_a.c sends this to
+   kernel/user/display_client_b.c only after its OWN DISPLAY_OP_PRESENT
+   has actually landed -- the deliberate hand-off that makes this
+   milestone's two-window z-order demo deterministic BY CONSTRUCTION
+   (client B's own DISPLAY_OP_REQUEST cannot reach the server before
+   client A's canvas is already on screen), the same "explicit go/
+   no-go handoff, not a timing assumption" discipline Milestone 20's
+   own ADR already established as strictly more robust. */
+#define DISPLAY_OP_GO 4
+
+/* Milestone 28 (ADR 0028): server -> client, sent only AFTER the
+   server has actually finished mapping and compositing (sys_fb_present)
+   that specific client's DISPLAY_OP_PRESENT -- the missing link that
+   makes "client A's canvas is really on screen" an observable,
+   waitable fact rather than an assumption. sys_ipc_send() only ever
+   proves a message was ENQUEUED in the destination's inbox, never that
+   the destination has finished (or even started) acting on it -- a
+   client that wants to know its canvas actually landed (or, for client
+   A specifically, that must not signal client B to start until its
+   OWN canvas is already visible) has to wait for this. No fields
+   used. */
+#define DISPLAY_OP_ACK 5
+
 #endif /* KERNEL_USER_DISPLAY_PROTOCOL_H */

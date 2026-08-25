@@ -1432,17 +1432,86 @@ demo client, not a substitute for kernel enforcement against a
 genuinely untrusted one); no damage/dirty-rectangle tracking, every
 present re-blits the whole rectangle.
 
-## 28. Multiple windows: z-order, damage tracking, input focus (sequence TBD)
+## 28. Multiple windows and z-order compositing
 
-Milestone 28 is intentionally left as a one-line placeholder here — full
+Fifth step of the GUI arc (`Desktop.md`). `Desktop.md`'s own milestone 5
+bundled "z-order, damage tracking, input focus" as one item, written
+speculatively before any of it was built; this milestone deliberately
+covers only z-order compositing — real click-driven input focus needs a
+genuinely separate new subsystem (routing a hardware input event to a
+ring-3 process, which nothing in this kernel does yet) and was split
+into its own later milestone instead (see ADR 0028's Decision).
+
+**Deliverables:**
+- `kernel/user/display_server.c` extended from Milestone 27's single
+  client to two (`WINDOWS_TOTAL = 2`), cascaded (+50, +50) so their
+  granted 200x150 canvases genuinely overlap (a real 150x100 shared
+  region) — served in a flat, strictly sequential loop, correct only
+  because the clients themselves guarantee strict arrival order (see
+  next point), not a general per-pid state machine.
+- `kernel/user/display_client_a.c`/`display_client_b.c` (renamed/added
+  from Milestone 27's single client): client A sends client B an
+  explicit `DISPLAY_OP_GO` hand-off, but only AFTER receiving a NEW
+  `DISPLAY_OP_ACK` from the server confirming its own canvas is
+  genuinely already composited (`sys_ipc_send()` only proves a message
+  was enqueued, never that the destination acted on it — a real gap
+  caught in review before ever booting) — making the resulting z-order
+  deterministic by construction, not a race.
+- Since both windows are fully opaque, correct z-order needs no
+  compositing/damage-tracking pass at all — just presentation order;
+  a later window's pixels naturally win any overlap. No new kernel
+  syscalls were needed at all for this milestone.
+**Verification:** `make run` boots and prints every Milestone 1-27
+marker unchanged plus both windows' markers in the correct sequence,
+ending with `sys_fb_present blitted 0x2 frame(s)` (`kernel_main`'s own
+self-test now checks for EXACTLY 2, not just ">0").
+**The real proof is pixel-level:** `tests/qemu/test_display_server_selftest.sh`
+(rewritten for this milestone) takes a real QEMU screendump and
+confirms client B's canvas is a full, unbroken rectangle while client
+A's is reduced to an L-shape with the same outer extent — plus
+spot-checks proving the exact occlusion direction, not just that both
+colors exist somewhere.
+**Two real bugs found along the way, not planned in advance:** (1) the
+smoke test's own first draft, using hardcoded absolute screen
+coordinates, failed — root-caused to `kernel/drivers/fbconsole.c`'s
+`fb_scroll_up()` shifting the entire framebuffer (including
+already-drawn windows) once this milestone's extra boot-time console
+output pushed a scroll threshold no earlier milestone had reached;
+fixed by checking geometry relative to the windows' own discovered
+position rather than an absolute constant. (2) The SAME extra scroll
+volume exposed a genuine, real ghost-trail regression in
+`kernel/drivers/cursor.c` (Milestone 23) — a scroll it had no way to
+know about left its own save/restore bookkeeping stale, caught by that
+milestone's own pre-existing `test_framebuffer_selftest.sh` check;
+fixed with two new public functions, `cursor_hide()`/`cursor_show()`,
+wrapped around `fbconsole.c`'s own scroll call (a small, deliberate new
+`fbconsole.c` → `cursor.c` coupling). `-d int,cpu_reset` trace unchanged
+from Milestone 27. All twenty-five other smoke tests and all four host
+test suites pass. Reap count raised 9 → 10.
+**Design record:** `docs/adr/0028-multiple-windows-z-order.md`.
+**Known limitations (accepted for this milestone only):** exactly two
+clients, fixed cascade placement, no dynamic window list/move/close/
+raise, no real input-driven focus yet. Windows themselves (unlike the
+now-fixed cursor) are NOT immune to later console scroll — a real,
+growing architectural gap (the text console and the window/cursor
+compositing layer share one physical framebuffer with no separate
+surface, and no "please redraw yourself" protocol for a ring-3 window
+owner) worth a dedicated fix before window chrome/interactivity makes
+a visibly drifting window user-facing, not just a test inconvenience.
+
+## 29. Real input-driven window focus (routing clicks to a process) (sequence TBD)
+
+Milestone 29 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
-in sequence per `Desktop.md`'s GUI arc: a window list, routing
-keyboard/mouse events (including clicks — the cursor currently only
-tracks movement, buttons aren't wired to anything) to whichever window
-is focused, then chrome/widgets, then real apps. See `Desktop.md` for
-the full sequencing and `future.md` for the rest of this project's
-continuation briefing. Separately, still awaiting the user's decision:
-a disk driver + real filesystem, ACPI-based shutdown, and SMP/
-networking, all explicitly flagged non-goals.
+in sequence per `Desktop.md`'s GUI arc: a genuinely new subsystem —
+routing a real hardware input event (a mouse click; the cursor
+currently only tracks movement, buttons aren't wired to anything) from
+the kernel's own PS/2 driver to a specific ring-3 process via IPC, then
+using that to raise/focus whichever window was clicked — before window
+chrome/widgets, then real apps. See `Desktop.md` for the full
+sequencing and `future.md` for the rest of this project's continuation
+briefing. Separately, still awaiting the user's decision: a disk driver
++ real filesystem, ACPI-based shutdown, and SMP/networking, all
+explicitly flagged non-goals.

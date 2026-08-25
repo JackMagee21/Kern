@@ -40,8 +40,10 @@ extern const uint8_t ipc_receiver_image_start[]; /* kernel/user/embed/ipc_receiv
 extern const uint8_t ipc_receiver_image_end[];
 extern const uint8_t display_server_image_start[]; /* kernel/user/embed/display_server_blob.asm: embedded build/kernel/user/display_server.elf */
 extern const uint8_t display_server_image_end[];
-extern const uint8_t display_client_image_start[]; /* kernel/user/embed/display_client_blob.asm: embedded build/kernel/user/display_client.elf */
-extern const uint8_t display_client_image_end[];
+extern const uint8_t display_client_a_image_start[]; /* kernel/user/embed/display_client_a_blob.asm: embedded build/kernel/user/display_client_a.elf */
+extern const uint8_t display_client_a_image_end[];
+extern const uint8_t display_client_b_image_start[]; /* kernel/user/embed/display_client_b_blob.asm: embedded build/kernel/user/display_client_b.elf */
+extern const uint8_t display_client_b_image_end[];
 
 /* Milestone 6 self-test: two kernel threads that never voluntarily
    yield, proving the scheduler forcibly preempts a task that never
@@ -504,31 +506,44 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(ipc_receiver_process->id);
     console_write("\n");
 
-    /* Milestone 27 (ADR 0027): an EIGHTH and NINTH orphan process --
-       Desktop.md's minimal single-client display server and its one
-       client. The SERVER is created FIRST (unlike the ipc demo pair
-       above, where creation order mattered for a specific blocking-
-       count self-test) purely so its id is known here, to build the
-       client's own bootstrap message -- there's no equivalent ordering
-       requirement to reason through this time, since the request/
-       grant/present handshake (display_protocol.h) is inherently
-       self-synchronizing via blocking IPC regardless of which process
-       the scheduler actually runs first (see display_server.c's and
-       display_client.c's own comments on why their respective
-       sys_fb_acquire()-exclusivity checks are causally, not just
-       probabilistically, ordered correctly either way). */
+    /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028): an EIGHTH,
+       NINTH, and TENTH orphan process -- Desktop.md's display server
+       and its two clients (Milestone 28 extended the original single
+       client into a deterministic two-window z-order demo). The SERVER
+       is created FIRST purely so its id is known here, to build both
+       clients' own bootstrap messages -- there's no equivalent
+       scheduling-order requirement to reason through, since the
+       request/grant/present handshake (display_protocol.h) is
+       inherently self-synchronizing via blocking IPC regardless of
+       which process the scheduler actually runs first (see
+       display_server.c's own comment). CLIENT B is created before
+       CLIENT A, purely so client A's own bootstrap message (which
+       carries client B's pid, for the go-signal hand-off) can be built
+       here -- this is a compile-time/code-ordering constraint only,
+       NOT a scheduling one: client B cannot possibly act on anything
+       before client A's own go-signal arrives regardless of which of
+       the two the scheduler actually runs first (see
+       display_client_b.c's own comment). */
     task_t *display_server_process = task_create_user_image(display_server_image_start, display_server_image_end);
     scheduler_add_task(display_server_process);
-    task_t *display_client_process = task_create_user_image(display_client_image_start, display_client_image_end);
-    scheduler_add_task(display_client_process);
-    ipc_message_t display_boot_msg = { .fields = { display_server_process->id, 0, 0, 0 } };
-    if (!ipc_send(display_client_process, &display_boot_msg)) {
-        panic("kernel_main: failed to inject the display demo's own bootstrap message (inbox somehow already full)");
+    task_t *display_client_b_process = task_create_user_image(display_client_b_image_start, display_client_b_image_end);
+    scheduler_add_task(display_client_b_process);
+    task_t *display_client_a_process = task_create_user_image(display_client_a_image_start, display_client_a_image_end);
+    scheduler_add_task(display_client_a_process);
+    ipc_message_t display_a_boot_msg = { .fields = { display_server_process->id, display_client_b_process->id, 0, 0 } };
+    if (!ipc_send(display_client_a_process, &display_a_boot_msg)) {
+        panic("kernel_main: failed to inject display client A's own bootstrap message (inbox somehow already full)");
+    }
+    ipc_message_t display_b_boot_msg = { .fields = { display_server_process->id, 0, 0, 0 } };
+    if (!ipc_send(display_client_b_process, &display_b_boot_msg)) {
+        panic("kernel_main: failed to inject display client B's own bootstrap message (inbox somehow already full)");
     }
     console_write("[OK] display server/client processes created, server pid 0x");
     console_write_hex(display_server_process->id);
-    console_write(", client pid 0x");
-    console_write_hex(display_client_process->id);
+    console_write(", client A pid 0x");
+    console_write_hex(display_client_a_process->id);
+    console_write(", client B pid 0x");
+    console_write_hex(display_client_b_process->id);
     console_write("\n");
 
     keyboard_init();
@@ -639,8 +654,10 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        (ADR 0027) raised the target again, 7 to 9: the display server
        and its one client are two more genuinely distinct processes,
        whose own shared-memory canvas buffer is refcounted the
-       identical way. */
-    while (scheduler_reaped_count() < 9) {
+       identical way. Milestone 28 (ADR 0028) raised the target again,
+       9 to 10: the single client became two (client A and client B),
+       each with its own independently refcounted canvas buffer. */
+    while (scheduler_reaped_count() < 10) {
         __asm__ volatile("hlt");
     }
     uint64_t frames_after_reap = pmm_frames_free();
@@ -712,19 +729,24 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(syscall_get_ipc_recv_block_count());
     console_write(" turns) before the sender's message arrived\n");
 
-    /* Milestone 27 (ADR 0027): proves sys_fb_present genuinely blitted
-       into the real framebuffer at least once this boot, not just that
-       the display server/client's own success markers printed above --
-       the same "prove the new syscall path was actually exercised, not
-       just correct by luck" pattern syscall_get_exec_count()/
-       syscall_get_ipc_recv_block_count() already established. The
-       ACTUAL pixel-level proof that the granted canvas landed at the
-       right place, at the right (bound-enforced) size, and nowhere
-       else, is tests/qemu/test_display_server_selftest.sh's own real
-       QEMU screendump check -- this counter only proves the syscall
-       ran, not where it drew. */
-    if (syscall_get_fb_present_count() == 0) {
-        panic("display server self-test failed: sys_fb_present never actually blitted a frame");
+    /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028): proves
+       sys_fb_present genuinely blitted into the real framebuffer, not
+       just that the display server/clients' own success markers
+       printed above -- the same "prove the new syscall path was
+       actually exercised, not just correct by luck" pattern
+       syscall_get_exec_count()/syscall_get_ipc_recv_block_count()
+       already established. Milestone 28 checks for EXACTLY 2, not just
+       ">0": one call per window (client A, then client B) -- a count
+       of 1 here would mean the second window's own present silently
+       never happened even though its own success marker might still
+       have printed for some other reason. The ACTUAL pixel-level proof
+       that both windows landed at the right place, at the right
+       (bound-enforced) size, in the right z-order, and nowhere else,
+       is tests/qemu/test_display_server_selftest.sh's own real QEMU
+       screendump check -- this counter only proves the syscalls ran,
+       not where they drew. */
+    if (syscall_get_fb_present_count() != 2) {
+        panic("display server self-test failed: sys_fb_present did not blit exactly 2 frames (one window landed silently, or too many)");
     }
     console_write("[OK] display server self-test passed, sys_fb_present blitted 0x");
     console_write_hex(syscall_get_fb_present_count());

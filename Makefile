@@ -54,7 +54,8 @@ ASM_SOURCES := kernel/arch/x86_64/boot.asm kernel/arch/x86_64/gdt_flush.asm kern
                kernel/arch/x86_64/syscall_entry.asm kernel/user/embed/user_elf_blob.asm kernel/user/embed/fork_demo_blob.asm \
                kernel/user/embed/exec_demo_blob.asm kernel/user/embed/exec_target_blob.asm \
                kernel/user/embed/ipc_sender_blob.asm kernel/user/embed/ipc_receiver_blob.asm \
-               kernel/user/embed/display_server_blob.asm kernel/user/embed/display_client_blob.asm
+               kernel/user/embed/display_server_blob.asm kernel/user/embed/display_client_a_blob.asm \
+               kernel/user/embed/display_client_b_blob.asm
 
 C_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
 ASM_OBJECTS := $(patsubst %.asm,$(BUILD_DIR)/%.o,$(ASM_SOURCES))
@@ -87,8 +88,10 @@ IPC_RECEIVER_ELF := $(BUILD_DIR)/kernel/user/ipc_receiver.elf
 IPC_RECEIVER_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/ipc_receiver_blob.o
 DISPLAY_SERVER_ELF := $(BUILD_DIR)/kernel/user/display_server.elf
 DISPLAY_SERVER_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/display_server_blob.o
-DISPLAY_CLIENT_ELF := $(BUILD_DIR)/kernel/user/display_client.elf
-DISPLAY_CLIENT_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/display_client_blob.o
+DISPLAY_CLIENT_A_ELF := $(BUILD_DIR)/kernel/user/display_client_a.elf
+DISPLAY_CLIENT_A_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/display_client_a_blob.o
+DISPLAY_CLIENT_B_ELF := $(BUILD_DIR)/kernel/user/display_client_b.elf
+DISPLAY_CLIENT_B_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/display_client_b_blob.o
 
 # Milestone 24: the minimal userspace C runtime (Desktop.md) -- crt0
 # (asm, built via the ordinary $(BUILD_DIR)/%.o: %.asm rule below) plus
@@ -105,7 +108,7 @@ USER_RT_OBJECTS := $(USER_RT_ASM_OBJECTS) $(USER_RT_C_OBJECTS)
 # runtime works (Desktop.md); the GUI arc's window server/apps join
 # this list as their own milestones land.
 USER_C_SOURCES := $(USER_RT_C_SOURCES) kernel/user/hello.c kernel/user/ipc_sender.c kernel/user/ipc_receiver.c \
-                   kernel/user/display_server.c kernel/user/display_client.c
+                   kernel/user/display_server.c kernel/user/display_client_a.c kernel/user/display_client_b.c
 USER_C_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(USER_C_SOURCES))
 
 .PHONY: all run debug clean check-mb2
@@ -136,7 +139,8 @@ $(EXEC_TARGET_BLOB_OBJ): $(EXEC_TARGET_ELF)
 $(IPC_SENDER_BLOB_OBJ): $(IPC_SENDER_ELF)
 $(IPC_RECEIVER_BLOB_OBJ): $(IPC_RECEIVER_ELF)
 $(DISPLAY_SERVER_BLOB_OBJ): $(DISPLAY_SERVER_ELF)
-$(DISPLAY_CLIENT_BLOB_OBJ): $(DISPLAY_CLIENT_ELF)
+$(DISPLAY_CLIENT_A_BLOB_OBJ): $(DISPLAY_CLIENT_A_ELF)
+$(DISPLAY_CLIENT_B_BLOB_OBJ): $(DISPLAY_CLIENT_B_ELF)
 
 $(BUILD_DIR)/%.o: %.asm
 	@mkdir -p $(dir $@)
@@ -170,9 +174,13 @@ $(DISPLAY_SERVER_ELF): $(BUILD_DIR)/kernel/user/display_server.o $(USER_RT_OBJEC
 	@mkdir -p $(dir $@)
 	$(LD) -T kernel/user/user.ld --nostdlib -o $@ $(USER_RT_OBJECTS) $(BUILD_DIR)/kernel/user/display_server.o
 
-$(DISPLAY_CLIENT_ELF): $(BUILD_DIR)/kernel/user/display_client.o $(USER_RT_OBJECTS) kernel/user/user.ld
+$(DISPLAY_CLIENT_A_ELF): $(BUILD_DIR)/kernel/user/display_client_a.o $(USER_RT_OBJECTS) kernel/user/user.ld
 	@mkdir -p $(dir $@)
-	$(LD) -T kernel/user/user.ld --nostdlib -o $@ $(USER_RT_OBJECTS) $(BUILD_DIR)/kernel/user/display_client.o
+	$(LD) -T kernel/user/user.ld --nostdlib -o $@ $(USER_RT_OBJECTS) $(BUILD_DIR)/kernel/user/display_client_a.o
+
+$(DISPLAY_CLIENT_B_ELF): $(BUILD_DIR)/kernel/user/display_client_b.o $(USER_RT_OBJECTS) kernel/user/user.ld
+	@mkdir -p $(dir $@)
+	$(LD) -T kernel/user/user.ld --nostdlib -o $@ $(USER_RT_OBJECTS) $(BUILD_DIR)/kernel/user/display_client_b.o
 
 $(KERNEL_ELF): $(OBJECTS) boot/linker.ld
 	$(CC) $(LDFLAGS) $(OBJECTS) -o $@ -lgcc
