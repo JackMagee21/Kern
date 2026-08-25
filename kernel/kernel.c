@@ -38,6 +38,10 @@ extern const uint8_t ipc_sender_image_start[]; /* kernel/user/embed/ipc_sender_b
 extern const uint8_t ipc_sender_image_end[];
 extern const uint8_t ipc_receiver_image_start[]; /* kernel/user/embed/ipc_receiver_blob.asm: embedded build/kernel/user/ipc_receiver.elf */
 extern const uint8_t ipc_receiver_image_end[];
+extern const uint8_t display_server_image_start[]; /* kernel/user/embed/display_server_blob.asm: embedded build/kernel/user/display_server.elf */
+extern const uint8_t display_server_image_end[];
+extern const uint8_t display_client_image_start[]; /* kernel/user/embed/display_client_blob.asm: embedded build/kernel/user/display_client.elf */
+extern const uint8_t display_client_image_end[];
 
 /* Milestone 6 self-test: two kernel threads that never voluntarily
    yield, proving the scheduler forcibly preempts a task that never
@@ -500,6 +504,33 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(ipc_receiver_process->id);
     console_write("\n");
 
+    /* Milestone 27 (ADR 0027): an EIGHTH and NINTH orphan process --
+       Desktop.md's minimal single-client display server and its one
+       client. The SERVER is created FIRST (unlike the ipc demo pair
+       above, where creation order mattered for a specific blocking-
+       count self-test) purely so its id is known here, to build the
+       client's own bootstrap message -- there's no equivalent ordering
+       requirement to reason through this time, since the request/
+       grant/present handshake (display_protocol.h) is inherently
+       self-synchronizing via blocking IPC regardless of which process
+       the scheduler actually runs first (see display_server.c's and
+       display_client.c's own comments on why their respective
+       sys_fb_acquire()-exclusivity checks are causally, not just
+       probabilistically, ordered correctly either way). */
+    task_t *display_server_process = task_create_user_image(display_server_image_start, display_server_image_end);
+    scheduler_add_task(display_server_process);
+    task_t *display_client_process = task_create_user_image(display_client_image_start, display_client_image_end);
+    scheduler_add_task(display_client_process);
+    ipc_message_t display_boot_msg = { .fields = { display_server_process->id, 0, 0, 0 } };
+    if (!ipc_send(display_client_process, &display_boot_msg)) {
+        panic("kernel_main: failed to inject the display demo's own bootstrap message (inbox somehow already full)");
+    }
+    console_write("[OK] display server/client processes created, server pid 0x");
+    console_write_hex(display_server_process->id);
+    console_write(", client pid 0x");
+    console_write_hex(display_client_process->id);
+    console_write("\n");
+
     keyboard_init();
     mouse_init();
     pic_clear_mask(0);  /* IRQ0: timer */
@@ -604,8 +635,12 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        mapper's own VMM_FLAG_OWNED mapping -- it's only actually freed
        back to the pmm once BOTH processes have exited and dropped
        their own reference, so this baseline comparison only becomes
-       valid once all 7 reaps have happened, not before. */
-    while (scheduler_reaped_count() < 7) {
+       valid once all 7 reaps have happened, not before. Milestone 27
+       (ADR 0027) raised the target again, 7 to 9: the display server
+       and its one client are two more genuinely distinct processes,
+       whose own shared-memory canvas buffer is refcounted the
+       identical way. */
+    while (scheduler_reaped_count() < 9) {
         __asm__ volatile("hlt");
     }
     uint64_t frames_after_reap = pmm_frames_free();
@@ -676,6 +711,24 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write("[OK] ipc self-test passed, sys_ipc_recv genuinely blocked (0x");
     console_write_hex(syscall_get_ipc_recv_block_count());
     console_write(" turns) before the sender's message arrived\n");
+
+    /* Milestone 27 (ADR 0027): proves sys_fb_present genuinely blitted
+       into the real framebuffer at least once this boot, not just that
+       the display server/client's own success markers printed above --
+       the same "prove the new syscall path was actually exercised, not
+       just correct by luck" pattern syscall_get_exec_count()/
+       syscall_get_ipc_recv_block_count() already established. The
+       ACTUAL pixel-level proof that the granted canvas landed at the
+       right place, at the right (bound-enforced) size, and nowhere
+       else, is tests/qemu/test_display_server_selftest.sh's own real
+       QEMU screendump check -- this counter only proves the syscall
+       ran, not where it drew. */
+    if (syscall_get_fb_present_count() == 0) {
+        panic("display server self-test failed: sys_fb_present never actually blitted a frame");
+    }
+    console_write("[OK] display server self-test passed, sys_fb_present blitted 0x");
+    console_write_hex(syscall_get_fb_present_count());
+    console_write(" frame(s) onto the real framebuffer\n");
 
     /* Steady state: an interactive shell instead of a bare idle loop --
        this is what actually makes the kernel usable sitting at real

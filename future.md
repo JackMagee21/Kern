@@ -17,11 +17,11 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 26 (2026-08-25)
+## State as of Milestone 27 (2026-08-25)
 
 **GUI arc in progress** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
-with the user). Milestones 24-26 (below) are the first three steps.
+with the user). Milestones 24-27 (below) are the first four steps.
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -228,8 +228,28 @@ the design reasoning and any real bugs found along the way.
     an inverted return-value check, and a scheduling-order assumption
     that turned out backwards (`scheduler_add_task()` makes the LAST
     task added run FIRST, not the first). See ADR 0026.
+27. **Minimal display server, one client, no overlap** — the GUI arc's
+    own flagged "actual hard-unknown milestone": prove the
+    client-server display model works at all before any multi-window
+    logic goes on top. Two new syscalls (`SYS_FB_ACQUIRE`/
+    `SYS_FB_PRESENT`, `kernel/arch/x86_64/syscall.c`) — the kernel
+    stays the sole framebuffer owner/pixel-writer (ownership is
+    kernel-ENFORCED by pid, not a userspace convention), but the actual
+    canvas-size POLICY — "the server enforces the bound" — lives in
+    userspace (`kernel/user/display_server.c`'s own fixed 200x150
+    maximum). A tiny 3-message protocol
+    (`kernel/user/display_protocol.h`) layered entirely on Milestone
+    26's existing IPC/shm mechanism, no new IPC machinery. The client
+    (`kernel/user/display_client.c`) deliberately asks for 400x300 and
+    gets 200x150 back — proven pixel-for-pixel by a real QEMU
+    `screendump` bounding-box check
+    (`tests/qemu/test_display_server_selftest.sh`), not just a
+    self-reported marker. Booted clean on the FIRST real attempt — every
+    design question (including a causal-ordering argument for why
+    Milestone 26's own scheduling-order bug class couldn't recur here)
+    was worked through in review before ever running QEMU. See ADR 0027.
 
-**Testing state:** 25 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+**Testing state:** 26 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Almost every milestone has its own dedicated smoke
 test (Milestone 24 is the one exception — see item 24 above for why
@@ -237,11 +257,11 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** twenty milestones
-(9-26) all followed the same pattern — implement, boot in QEMU for
-real, fix what actually breaks, write the ADR describing what was
-tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15, 17-19, 21-22, and 24 all landed
+**A note on process discipline that held up well:** twenty-one
+milestones (9-27) all followed the same pattern — implement, boot in
+QEMU for real, fix what actually breaks, write the ADR describing what
+was tried and what was learned (including dead ends), commit in small
+logical pieces. Milestones 10-15, 17-19, 21-22, 24, and 27 all landed
 correctly on the first real boot; Milestone 9 (per-process address
 spaces), Milestone 16 (PS/2 mouse), Milestone 25 (blocking/wake
 primitive), and Milestone 26 (IPC/shm) each hit real bugs that needed
@@ -318,12 +338,12 @@ signal CLAUDE.md asks for before this territory gets touched.
 ## Reasonable next steps (not flagged, not started)
 
 The main line of "what's next" is now `Desktop.md`'s GUI arc (Milestones
-24-26 done; Milestone 27 = a minimal single-client display server — the
-actual hard-unknown milestone, proving the client-server model works
-at all before multi-window logic goes on top — then multi-window/
-input-focus, then chrome/widgets, then real apps). A real path-based
-`execve` remains blocked on the filesystem non-goal, which `Desktop.md`'s
-scope confirmation keeps deferred for this whole arc.
+24-27 done; Milestone 28 = multiple windows — a window list, z-order,
+damage tracking, and routing keyboard/mouse events, including clicks,
+to whichever window is focused — then chrome/widgets, then real apps).
+A real path-based `execve` remains blocked on the filesystem non-goal,
+which `Desktop.md`'s scope confirmation keeps deferred for this whole
+arc.
 
 A few smaller items outside that arc, not touching a non-goal:
 

@@ -5,6 +5,7 @@
 #include "gdt.h"
 #include "msr.h"
 #include "../../drivers/console.h"
+#include "../../drivers/framebuffer.h"
 #include "../../mm/vmm.h"
 #include "../../sched/scheduler.h"
 #include "../../sched/task.h"
@@ -295,6 +296,120 @@ static void sys_shm_map(syscall_frame_t *frame)
     frame->rax = shm_map(shm_id, current, NULL);
 }
 
+/* Milestone 27 (ADR 0027): the pid that currently owns the real
+   framebuffer, or 0 if nobody has acquired it yet. "One server process
+   owns the framebuffer" (Desktop.md) enforced HERE, at the kernel level
+   -- deliberately not just a userspace convention, so a buggy or
+   malicious second process genuinely cannot blit over the display-
+   server's own output no matter what it tries. Never reset once set
+   (not even when the owning process exits) -- this milestone's own
+   demo process is expected to run for the rest of the kernel's uptime,
+   the same assumption kernel_main's shell already makes about itself;
+   releasing ownership on exit is a real gap for a future milestone
+   that actually needs to replace a running display server, not
+   something this one's own consumers need. */
+static uint32_t fb_owner_pid;
+
+/* Milestone 27 (ADR 0027): see syscall.h's own doc comment on
+   syscall_get_fb_present_count(). */
+static uint64_t sys_fb_present_count;
+
+/* No args. Succeeds exactly ONCE, ever, for the whole boot -- the
+   FIRST caller (any process, whichever gets here first) becomes the
+   framebuffer's sole owner; every later call, including a repeat call
+   from the SAME process, fails. Returns (fb_get_width() << 32) |
+   fb_get_height() on success (both realistically far under 2^32, safe
+   to pack into one 64-bit return value the same way this codebase
+   already packs MSR_STAR's two selector halves), or (uint64_t)-1 on
+   failure -- the same failure sentinel sys_write/sys_wait/sys_exec/
+   sys_ipc_send already use (not sys_shm_create/sys_shm_map's "0 =
+   failure" convention: this return value is never a valid id/address,
+   it's packed dimensions, so 0 isn't a reserved sentinel here the way
+   it is for those). */
+static void sys_fb_acquire(syscall_frame_t *frame)
+{
+    if (fb_owner_pid != 0) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+    fb_owner_pid = scheduler_current_task()->id;
+    frame->rax = ((uint64_t)fb_get_width() << 32) | (uint64_t)fb_get_height();
+}
+
+/* Milestone 27 (ADR 0027): rdi = x, rsi = y, rdx = w, r10 = h, r8 =
+   buf_va -- a pointer, in the CALLER's OWN user memory, to w*h
+   uint32_t pixels, row-major, tightly packed (stride == w, no padding
+   -- the caller's own shared-memory buffer IS the presented rectangle,
+   never a sub-window of a larger one; see this milestone's Known
+   limitations), each already in plain 0x00RRGGBB form (NOT this
+   framebuffer's own possibly-different native bit layout) -- decouples
+   every caller from fb_pack_color()'s negotiated channel positions,
+   the same abstraction fb_pack_color() itself exists to provide to
+   kernel-side callers. Only the process that successfully called
+   sys_fb_acquire() may ever call this -- checked by pid, not by "is
+   ANY owner set", so a second process can never blit even if the real
+   owner has (for whatever reason) not yet made its own first present
+   call. Fails (-1) if the caller isn't the owner, w or h is 0 or
+   exceeds a generous sanity cap (FB_PRESENT_MAX_DIM -- defends against
+   a pathological per-pixel loop bound; the REAL backing-memory check
+   below already rejects anything not actually mapped, this is just
+   cheap depth), or [buf_va, buf_va + w*h*4) isn't a fully validated
+   user range in the CALLER's own address space (vmm_is_user_range() --
+   CLAUDE.md: never dereference a user-supplied pointer/length without
+   validating it first; syscalls never switch CR3, so this correctly
+   checks the CALLING process's own tables, the same invariant
+   sys_write/sys_ipc_send already rely on). Individual out-of-screen
+   pixels are silently dropped by fb_put_pixel()'s own existing bounds
+   check -- no separate screen-edge clamp is needed here. What DOES get
+   enforced here is ownership and buffer-validity only: the actual
+   canvas-size POLICY (Desktop.md: "the server enforces the bound") is
+   this milestone's display-server demo's own job, in userspace --
+   kernel/user/display_server.c never grants more than its own fixed
+   maximum, regardless of what a client asks for; this syscall just
+   faithfully (and safely) blits whatever a validated owner asks it
+   to. */
+#define FB_PRESENT_MAX_DIM 2048u
+
+static void sys_fb_present(syscall_frame_t *frame)
+{
+    task_t *current = scheduler_current_task();
+    if (fb_owner_pid == 0 || fb_owner_pid != current->id) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    uint32_t x = (uint32_t)frame->rdi;
+    uint32_t y = (uint32_t)frame->rsi;
+    uint32_t w = (uint32_t)frame->rdx;
+    uint32_t h = (uint32_t)frame->r10;
+    uint64_t buf_va = frame->r8;
+
+    if (w == 0 || h == 0 || w > FB_PRESENT_MAX_DIM || h > FB_PRESENT_MAX_DIM) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    uint64_t buf_bytes = (uint64_t)w * (uint64_t)h * 4u;
+    if (!vmm_is_user_range(buf_va, buf_bytes)) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    const uint32_t *buf = (const uint32_t *)(uintptr_t)buf_va;
+    for (uint32_t py = 0; py < h; py++) {
+        for (uint32_t px = 0; px < w; px++) {
+            uint32_t pixel = buf[(uint64_t)py * w + px];
+            uint8_t r = (uint8_t)(pixel >> 16);
+            uint8_t g = (uint8_t)(pixel >> 8);
+            uint8_t b = (uint8_t)pixel;
+            fb_put_pixel(x + px, y + py, fb_pack_color(r, g, b));
+        }
+    }
+
+    sys_fb_present_count++;
+    frame->rax = 0;
+}
+
 void syscall_dispatch(syscall_frame_t *frame)
 {
     syscall_count++;
@@ -330,6 +445,12 @@ void syscall_dispatch(syscall_frame_t *frame)
     case SYS_SHM_MAP:
         sys_shm_map(frame);
         break;
+    case SYS_FB_ACQUIRE:
+        sys_fb_acquire(frame);
+        break;
+    case SYS_FB_PRESENT:
+        sys_fb_present(frame);
+        break;
     default:
         frame->rax = (uint64_t)-1;
         break;
@@ -354,4 +475,9 @@ uint64_t syscall_get_exec_count(void)
 uint64_t syscall_get_ipc_recv_block_count(void)
 {
     return sys_ipc_recv_block_count;
+}
+
+uint64_t syscall_get_fb_present_count(void)
+{
+    return sys_fb_present_count;
 }

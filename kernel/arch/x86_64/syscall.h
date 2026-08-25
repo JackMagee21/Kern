@@ -30,6 +30,8 @@ typedef struct __attribute__((packed)) {
 #define SYS_IPC_RECV   7
 #define SYS_SHM_CREATE 8
 #define SYS_SHM_MAP    9
+#define SYS_FB_ACQUIRE 10
+#define SYS_FB_PRESENT 11
 
 /* Programs STAR/LSTAR/SFMASK and sets EFER.SCE. Must run after
    gdt_init() (STAR encodes GDT selector offsets) and tss_init().
@@ -91,6 +93,16 @@ uint64_t syscall_get_exec_count(void);
    sys_wait (ADR 0020); this is the primitive's first REAL consumer
    outside its own Milestone 25 self-test. */
 uint64_t syscall_get_ipc_recv_block_count(void);
+
+/* Milestone 27 (ADR 0027): how many times sys_fb_present has actually
+   blitted a validated buffer into the real framebuffer (the owning
+   process's whole reason for existing) -- lets kernel_main's self-test
+   prove the new syscall path was genuinely exercised, not just that
+   the display-server demo's own success markers printed, the same
+   "prove the new behavior was actually exercised" pattern
+   syscall_get_exec_count()/syscall_get_ipc_recv_block_count() already
+   established. */
+uint64_t syscall_get_fb_present_count(void);
 
 /* Milestone 18 (ADR 0018); storage moved to the current task itself in
    Milestone 20 (ADR 0020) -- the calling process's user-mode RSP at the

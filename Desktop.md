@@ -102,12 +102,23 @@ each one is needed now, not a deliverables list.
    new `pid -> task_t*` registry (`scheduler_find_task()`) since a
    blocked IPC destination isn't searchable in the ready queue. Four
    real bugs found and fixed — see ADR 0026.
-4. **A minimal display server, one client, no overlap.** The actual
-   hard-unknown milestone: prove the client-server model works at all.
-   One server process owns the framebuffer; a client asks for a
-   rectangle; the server enforces the bound. Deliberately no multi-
-   window logic yet — isolate this risk before building UI on top of
-   it.
+4. **A minimal display server, one client, no overlap — DONE
+   (Milestone 27, ADR 0027).** One server process
+   (`kernel/user/display_server.c`) claims sole ownership of the real
+   framebuffer via a new kernel-ENFORCED syscall (`SYS_FB_ACQUIRE`,
+   succeeds exactly once ever, checked by pid); the client
+   (`kernel/user/display_client.c`) asks for a 400x300 canvas over a
+   tiny protocol built entirely on Milestone 26's existing IPC/shm
+   mechanism, and the server's own fixed policy grants only 200x150 —
+   "the server enforces the bound" turned out to mean a userspace
+   POLICY decision, not a kernel clamp (the kernel's own
+   `SYS_FB_PRESENT` just validates ownership + buffer safety and
+   faithfully blits whatever a validated owner asks). Proven pixel-for-
+   pixel by a real QEMU screendump bounding-box check, not just a
+   self-reported marker. Booted clean on the first real attempt — every
+   design question, including why Milestone 26's own scheduling-order
+   bug class couldn't recur here, was reasoned through in review before
+   ever running QEMU.
 5. **Multiple windows: z-order, damage tracking, input focus.** Window
    list, routing keyboard/mouse events (including clicks — the cursor
    currently only tracks movement, buttons aren't wired to anything)

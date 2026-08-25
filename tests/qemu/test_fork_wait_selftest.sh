@@ -72,10 +72,11 @@ fi
 # time, ADR 0021 -- refcounted, not a fresh unconditional pmm allocation
 # per page) was fully reclaimed too, down to the exact same baseline.
 # Milestone 22 (ADR 0022) raised this from 4 to 5; Milestone 26 (ADR
-# 0026) raised it again, 5 to 7.
+# 0026) raised it again, 5 to 7; Milestone 27 (ADR 0027) raised it
+# again, 7 to 9.
 reaped_count=$(grep -cF "exited and was reaped" "$SERIAL_LOG" 2>/dev/null || true)
-if [ "$reaped_count" -ne 7 ]; then
-    echo "FAIL: expected exactly 7 'exited and was reaped' messages, got $reaped_count" >&2
+if [ "$reaped_count" -ne 9 ]; then
+    echo "FAIL: expected exactly 9 'exited and was reaped' messages, got $reaped_count" >&2
     fail=1
 fi
 check "[OK] process lifecycle self-test passed, "

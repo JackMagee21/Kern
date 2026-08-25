@@ -1363,17 +1363,86 @@ process and 16 objects total; no priority/fairness policy for multiple
 tasks blocked on the same resource; `sys_ipc_recv` always blocks, no
 non-blocking variant.
 
-## 27. FS, SMP, and whatever's learned by then (sequence TBD)
+## 27. Minimal display server, one client, no overlap
 
-Milestone 27 is intentionally left as a one-line placeholder here — full
+Fourth step of the GUI arc (`Desktop.md`) and its own flagged "actual
+hard-unknown milestone": prove the client-server display model works
+at all before any multi-window logic (z-order, damage tracking, input
+focus) goes on top of it. One server process
+(`kernel/user/display_server.c`) claims sole ownership of the real
+graphics framebuffer; one client (`kernel/user/display_client.c`) asks
+for a canvas and gets back one no larger than the server's own fixed
+maximum, regardless of what it asked for.
+
+**Deliverables:**
+- `kernel/arch/x86_64/syscall.h/.c`: two new syscalls.
+  `SYS_FB_ACQUIRE` claims sole framebuffer ownership — succeeds exactly
+  once, ever, for the whole boot (kernel-enforced by pid, not a
+  userspace convention); returns packed `(width << 32) | height`.
+  `SYS_FB_PRESENT(x, y, w, h, buf_va)` blits a validated caller-owned
+  buffer (plain `0x00RRGGBB` pixels, decoupled from this framebuffer's
+  own negotiated bit layout via the EXISTING `fb_pack_color()`) onto
+  the real screen — only the current owner may ever call it.
+- `kernel/user/rt/syscall.h/.c`: userspace wrappers, including this
+  runtime's first 5-argument syscall (`syscall5()`, GCC register
+  variables for r10/r8 — the standard idiom, same one Linux's own raw
+  `syscall()` wrapper uses).
+- `kernel/user/display_protocol.h` (new): a tiny 3-message protocol
+  (REQUEST/GRANT/PRESENT) layered entirely on the EXISTING
+  `ipc_message_t`/`sys_ipc_send`/`sys_ipc_recv` mechanism (Milestone
+  26) — no new IPC machinery. A client's canvas is an ordinary
+  Milestone-26 shared-memory object.
+- `kernel/user/display_server.c`/`display_client.c` (new): the actual
+  demo. The client deliberately asks for 400x300; the server's own
+  fixed policy (`MAX_CANVAS_W`/`H = 200x150`) never grants more than
+  that — this IS "the server enforces the bound," implemented in
+  userspace policy, not a kernel clamp. The client never even
+  allocates a buffer bigger than what it was granted, so the
+  bound-enforcement proof is structural, not just a runtime check.
+**Verification:** `make run` boots and prints every Milestone 1-26
+marker unchanged plus the new demo's markers in sequence.
+**The real proof is pixel-level, not just a self-report:**
+`tests/qemu/test_display_server_selftest.sh` (new) takes a real QEMU
+monitor `screendump` (Milestone 23's own technique) after the shell
+prompt appears, scans the whole framebuffer for the client's
+distinctive fill color, and asserts the resulting bounding box is
+EXACTLY the server's granted 200x150 canvas at (100,100) — not the
+400x300 the client asked for. Ownership exclusivity is proven both
+within one process (the server's own second `sys_fb_acquire()` fails)
+and across processes (the client's own attempt fails too, causally
+after the server's successful one via the protocol's own blocking
+IPC — no scheduling-order assumption needed, unlike Milestone 26's own
+process-creation-order bug). `-d int,cpu_reset` trace unchanged from
+Milestone 26. All twenty-five earlier smoke tests plus the new one, and
+all four host test suites, pass. Reap count raised 7 → 9
+(`test_exec_selftest.sh`/`test_fork_wait_selftest.sh`/
+`test_process_lifecycle_selftest.sh`/`test_ipc_shm_selftest.sh` all
+needed this same assertion updated). Booted clean on the FIRST real
+attempt, then 3 additional repeat boots, identical shape every time —
+no live bugs this milestone, every design question worked through in
+review before ever running QEMU.
+**Design record:** `docs/adr/0027-minimal-display-server.md`.
+**Known limitations (accepted for this milestone only):** exactly one
+server, one client — no window list/z-order/damage tracking/input
+routing yet; canvas position is a fixed constant, not negotiated or
+movable; framebuffer ownership is never released even after the owning
+process exits; no per-owner kernel-side canvas cap (this milestone's
+own userspace policy is the only enforcement — fine for a cooperating
+demo client, not a substitute for kernel enforcement against a
+genuinely untrusted one); no damage/dirty-rectangle tracking, every
+present re-blits the whole rectangle.
+
+## 28. Multiple windows: z-order, damage tracking, input focus (sequence TBD)
+
+Milestone 28 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
-in sequence per `Desktop.md`'s GUI arc: a minimal single-client display
-server (the actual hard-unknown milestone — prove the client-server
-model works at all before building multi-window logic on top), then
-multi-window/input-focus, then chrome/widgets, then real apps. See
-`Desktop.md` for the full sequencing and `future.md` for the rest of
-this project's continuation briefing. Separately, still awaiting the
-user's decision: a disk driver + real filesystem, ACPI-based shutdown,
-and SMP/networking, all explicitly flagged non-goals.
+in sequence per `Desktop.md`'s GUI arc: a window list, routing
+keyboard/mouse events (including clicks — the cursor currently only
+tracks movement, buttons aren't wired to anything) to whichever window
+is focused, then chrome/widgets, then real apps. See `Desktop.md` for
+the full sequencing and `future.md` for the rest of this project's
+continuation briefing. Separately, still awaiting the user's decision:
+a disk driver + real filesystem, ACPI-based shutdown, and SMP/
+networking, all explicitly flagged non-goals.

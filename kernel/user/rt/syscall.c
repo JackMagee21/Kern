@@ -75,3 +75,37 @@ uint64_t sys_shm_map(uint64_t shm_id)
 {
     return syscall2(9, shm_id, 0);
 }
+
+/* Milestone 27 (ADR 0027): sys_fb_present needs 5 real arguments (x, y,
+   w, h, buf) -- the first syscall this runtime has ever needed more
+   than two for. Uses GCC's register-variable idiom (the standard way
+   to pin a specific value into a specific register for inline asm,
+   the same technique Linux's own raw syscall() wrappers use) to place
+   a4/a5 into r10/r8 -- the exact 3rd/4th/5th-argument registers this
+   kernel's own syscall ABI convention already documents (kernel/arch/
+   x86_64/syscall.h's own top-of-file comment: RDI/RSI/RDX/R10/R8/R9),
+   with a1/a2/a3 going into RDI/RSI/RDX via the ordinary "D"/"S"/"d"
+   constraints syscall2() above already uses for the first two. */
+static inline uint64_t syscall5(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    uint64_t ret;
+    register uint64_t r10 __asm__("r10") = a4;
+    register uint64_t r8  __asm__("r8")  = a5;
+    __asm__ volatile(
+        "syscall"
+        : "=a"(ret)
+        : "a"(num), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+uint64_t sys_fb_acquire(void)
+{
+    return syscall2(10, 0, 0);
+}
+
+uint64_t sys_fb_present(uint64_t x, uint64_t y, uint64_t w, uint64_t h, const void *buf)
+{
+    return syscall5(11, x, y, w, h, (uint64_t)(uintptr_t)buf);
+}

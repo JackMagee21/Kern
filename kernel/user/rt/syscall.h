@@ -39,4 +39,21 @@ uint64_t sys_shm_create(uint64_t size);
    virtual address (never 0), or 0 on failure. */
 uint64_t sys_shm_map(uint64_t shm_id);
 
+/* Milestone 27 (ADR 0027): claims sole ownership of the real
+   framebuffer -- succeeds exactly once, ever, for the whole boot; the
+   FIRST caller (any process) wins, every later call (including a
+   repeat call from the SAME process) fails. On success, returns
+   (screen_width << 32) | screen_height in the low/high 32 bits; on
+   failure, returns (uint64_t)-1. */
+uint64_t sys_fb_acquire(void);
+
+/* Milestone 27 (ADR 0027): blits a w*h rectangle of plain 0x00RRGGBB
+   pixels (row-major, tightly packed, stride == w) from buf -- the
+   caller's OWN user memory -- onto the real framebuffer at (x, y).
+   Only the process that already owns the framebuffer (sys_fb_acquire())
+   may call this; every other caller fails. Returns 0 on success,
+   (uint64_t)-1 on failure (not the owner, w/h zero or unreasonably
+   large, or buf isn't a fully validated user range for w*h*4 bytes). */
+uint64_t sys_fb_present(uint64_t x, uint64_t y, uint64_t w, uint64_t h, const void *buf);
+
 #endif /* KERNEL_USER_RT_SYSCALL_H */

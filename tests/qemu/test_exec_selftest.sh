@@ -81,8 +81,8 @@ fi
 # count would be wrong (either 8, if both somehow exited, or stuck below
 # 7 forever, if the old one never resumed and hung).
 reaped_count=$(grep -cF "exited and was reaped" "$SERIAL_LOG" 2>/dev/null || true)
-if [ "$reaped_count" -ne 7 ]; then
-    echo "FAIL: expected exactly 7 'exited and was reaped' messages, got $reaped_count" >&2
+if [ "$reaped_count" -ne 9 ]; then
+    echo "FAIL: expected exactly 9 'exited and was reaped' messages, got $reaped_count" >&2
     fail=1
 fi
 
