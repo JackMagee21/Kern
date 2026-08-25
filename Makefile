@@ -215,13 +215,27 @@ $(OS_ISO): $(KERNEL_ELF) boot/grub.cfg check-mb2
 # machine's actual installed QEMU 11.1.0 -- not assumed) grabs
 # automatically as soon as the pointer enters the window, so a user
 # who doesn't already know that click-to-grab convention still gets
-# working mouse input immediately, without a confusing "the cursor
-# won't move" first impression.
+# working mouse input immediately.
+#
+# GDK_BACKEND=x11 forces GTK to talk to the host display over XWayland
+# rather than native Wayland. Confirmed as a real, deliberate fix, not
+# a guess: sustained relative-mouse grab (what an unlimited FPS-style
+# drag needs) depends on the Wayland compositor implementing the
+# zwp_relative_pointer_manager_v1/zwp_pointer_constraints_v1
+# protocols; WSLg's own compositor has a known history of incomplete
+# support for exactly these, which manifests as almost NO relative
+# motion reaching the guest once grabbed (occasional 1px jitter, not a
+# real, continuous drag) -- precisely the symptom observed on this
+# machine. XWayland's own X11 pointer-grab path (XGrabPointer) is far
+# more mature and doesn't depend on those newer protocols at all. This
+# machine's own WSLg setup already provides XWayland (DISPLAY=:0,
+# confirmed set), so this doesn't add a new dependency, just a
+# different existing one.
 run: $(OS_ISO)
-	$(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on
+	GDK_BACKEND=x11 $(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on
 
 debug: $(OS_ISO)
-	$(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on -s -S &
+	GDK_BACKEND=x11 $(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on -s -S &
 	$(GDB) $(KERNEL_ELF) -ex "target remote :1234"
 
 clean:
