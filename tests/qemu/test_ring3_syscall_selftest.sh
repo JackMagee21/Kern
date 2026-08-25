@@ -4,7 +4,11 @@
 # actually ran in user mode, its validated sys_write syscall printed its
 # message, and its sys_nop loop kept round-tripping via SYSCALL/SYSRET
 # repeatedly -- not just that gdt_init()/tss_init()/syscall_init() ran
-# without crashing.
+# without crashing. Since Milestone 24 (ADR 0024), that process is
+# compiled from C via the new userspace runtime (kernel/user/rt/)
+# instead of hand-written NASM -- this test's own assertions needed no
+# changes, since they check the syscall path's OUTPUT, not what
+# compiled the program that made the calls.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

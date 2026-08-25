@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # Milestone 17 smoke test: boot headless in QEMU and assert the embedded
-# userspace ELF64 executable (kernel/user/hello.asm) was actually parsed
-# and mapped correctly by kernel/mm/elf_loader.c -- not just that a
-# ring-3 process ran (test_ring3_syscall_selftest.sh already covers
-# that). Specifically checks the program's own .data/.bss verification
-# passed for BOTH processes, and that neither ever printed the
-# "[FAIL]" message its own self-check would emit if the loader zeroed
-# .bss incorrectly or failed to copy .data's real initializer in.
+# userspace ELF64 executable (kernel/user/hello.c, rewritten from
+# hand-written NASM to C atop the new userspace runtime in Milestone 24
+# -- see ADR 0024) was actually parsed and mapped correctly by
+# kernel/mm/elf_loader.c -- not just that a ring-3 process ran
+# (test_ring3_syscall_selftest.sh already covers that). Specifically
+# checks the program's own .data/.bss verification passed for BOTH
+# processes, and that neither ever printed the "[FAIL]" message its own
+# self-check would emit if the loader zeroed .bss incorrectly or failed
+# to copy .data's real initializer in. This test's own assertions are
+# implementation-agnostic (they check hello's OUTPUT, not its source
+# language) and needed zero changes for Milestone 24 -- the strongest
+# available proof the new C runtime produces byte-for-byte the same
+# correct behavior the hand-written NASM version did.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

@@ -17,7 +17,11 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 23 (2026-08-25)
+## State as of Milestone 24 (2026-08-25)
+
+**GUI arc in progress** — see `Desktop.md` for the full multi-milestone
+plan (multi-window desktop, filesystem staying a non-goal, confirmed
+with the user). Milestone 24 (below) is the first step of that arc.
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -168,17 +172,37 @@ the design reasoning and any real bugs found along the way.
     assertion (`test_framebuffer_selftest.sh`) around a real injected
     `mouse_move`. See ADR 0023.
 
+24. **Minimal userspace C runtime** — the first step of the GUI arc
+    (`Desktop.md`). `kernel/user/rt/` (`crt0.asm` + `syscall.h/.c` +
+    `string.h/.c`) lets ring-3 programs be written in ordinary C instead
+    of hand-rolled NASM, proven by rewriting `hello.asm` in place as
+    `hello.c` — byte-for-byte identical behavior, zero test assertion
+    changes anywhere. `Makefile` gained a separate `USER_CFLAGS`
+    (`-mcmodel=large`, since process-private code is architecturally
+    stuck above `0x8000000000` — outside small/kernel-model addressing
+    range; no `-mno-red-zone`, since ring-3 code never takes a trap on
+    its own stack, ADR 0007). Explicitly NOT the "POSIX userland"
+    non-goal — a small wrapper library for this kernel's own six
+    syscalls, nothing resembling POSIX. No new smoke test file was
+    needed -- `test_elf_loader_selftest.sh`/`test_ring3_syscall_
+    selftest.sh` (both extended with a documentation note, ADR 0024)
+    already assert on `hello`'s exact output, which the C rewrite had
+    to match byte-for-byte; a new test would have been strictly weaker
+    proof than that. See ADR 0024.
+
 **Testing state:** 23 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
-the last commit. Every milestone has its own dedicated smoke test; run
+the last commit. Almost every milestone has its own dedicated smoke
+test (Milestone 24 is the first exception — see item 24 above for why
+reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** seventeen milestones
-(9-23) all followed the same pattern — implement, boot in QEMU for
+**A note on process discipline that held up well:** eighteen milestones
+(9-24) all followed the same pattern — implement, boot in QEMU for
 real, fix what actually breaks, write the ADR describing what was
 tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15, 17-19, and 21-23 all landed correctly
+logical pieces. Milestones 10-15, 17-19, and 21-24 all landed correctly
 on the first real boot; Milestone 9 (per-process address spaces) and
 Milestone 16 (PS/2 mouse) each hit one genuine bug that needed real
 diagnosis (not guessing) to fix — both are documented in detail in
@@ -237,35 +261,17 @@ signal CLAUDE.md asks for before this territory gets touched.
 
 ## Reasonable next steps (not flagged, not started)
 
-These don't touch a non-goal and were the natural next items on the
-"build this into an OS" list this session worked through one at a
-time:
+The main line of "what's next" is now `Desktop.md`'s GUI arc (Milestone
+24 done; Milestone 25 = a general blocking/wake scheduler primitive,
+then IPC — likely the real trigger for VMA tracking, deferred twice
+already for lack of a concrete consumer — then a minimal display
+server, then multi-window/input-focus, then chrome/widgets, then real
+apps). A real path-based `execve` remains blocked on the filesystem
+non-goal, which `Desktop.md`'s scope confirmation keeps deferred for
+this whole arc.
 
-- **VMAs — a real per-process memory map instead of a few hardcoded
-  regions.** Neither Milestone 21's COW fork (ADR 0021) nor Milestone
-  22's `sys_exec` (ADR 0022) needed this (the existing
-  `vmm_for_each_user_page()`/PTE-flag approach, and `sys_exec`'s own
-  reset-the-whole-private-region approach, were both enough), but any
-  FURTHER demand-paging work beyond what those two already do (a
-  genuinely on-demand-allocated heap/mmap-equivalent region, precise
-  per-region permission tracking, a real path-based `execve` that needs
-  to know a region's own bounds) would need one.
-- **A real path-based `execve`, once a filesystem exists.** Milestone
-  22's `sys_exec` (ADR 0022) can only target one of a small, fixed,
-  build-time-embedded set of images (`kernel/sched/task.c`'s
-  `exec_lookup_image()`) — there's no filesystem to load an arbitrary
-  path from yet. The actual image-swap mechanism
-  (`vmm_reset_user_address_space()` + `elf_load()` + overwriting the
-  syscall's own saved frame) doesn't need to change for this; only the
-  "which bytes" half does.
-- **A real sleep-queue/wake scheduler primitive.** Milestone 20 made
-  `sys_wait` genuinely blocking (ADR 0020), but deliberately via a
-  one-off `sti; hlt; cli` retry loop scoped to just that syscall, not a
-  general primitive (no `TASK_BLOCKED` state, no wake-list) — the right
-  call for a single caller, but real IPC (pipes, shared memory,
-  signals) would need an actual blocked-task/wake-list mechanism once
-  there's a second real reason for two processes to synchronize, not
-  just "wait for one to exit."
+A few smaller items outside that arc, not touching a non-goal:
+
 - **Cosmetic polish on Milestone 23's graphics console.** The mouse
   cursor is a plain filled square (ADR 0023's Known limitations), not a
   real arrow/pointer shape; the framebuffer console has no blinking

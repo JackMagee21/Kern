@@ -1170,21 +1170,72 @@ the visible graphics boot log starts partway through boot (after the
 direct-map is ready), not at `kernel_main`'s very first line — every
 message still reaches serial throughout, so nothing is silently lost.
 
-## 24. FS, SMP, and whatever's learned by then (sequence TBD)
+## 24. Minimal userspace C runtime — DONE
+First step of the GUI arc scoped in `Desktop.md` (multi-window desktop,
+filesystem staying a non-goal, confirmed with the user). Every user
+program through Milestone 23 was hand-written NASM — tractable for four
+small linear demos, not for what's coming (a window server, several
+real apps).
+**Proves:** a ring-3 program compiled from ordinary C (not hand-written
+assembly) runs correctly under this kernel's existing ELF loader/
+process model — proven the strongest available way: `kernel/user/
+hello.asm` (Milestone 17) was REWRITTEN in C using the new runtime and
+produces byte-for-byte the same behavior, so every existing test
+asserting on it needed zero changes.
+**Deliverables:**
+- `kernel/user/rt/crt0.asm` (new): entry stub bridging the raw
+  `iretq`/`sysretq` entry context (RSP 16-aligned, no return address
+  pushed) into one `main()` can safely run in as an ordinary SysV
+  function — the same `and rsp, ~0xf` fix `boot.asm`'s own
+  `higher_half_entry` already applies before its first C call.
+- `kernel/user/rt/syscall.h/.c` (new): thin C wrappers around this
+  kernel's own six syscalls — explicitly NOT the "POSIX userland"
+  non-goal, flagged as such in `Desktop.md` before this milestone
+  started.
+- `kernel/user/rt/string.h/.c` (new): minimal `memset`/`memcpy`/
+  `memmove`/`strlen`, both for explicit use and to satisfy any
+  implicit compiler-generated calls.
+- `Makefile`: `USER_CFLAGS` (`-mcmodel=large`, no `-mno-red-zone`,
+  otherwise matching the kernel's freestanding/no-FP stance) — a
+  separate flag set from the kernel's own `CFLAGS`, applied via a
+  static pattern rule scoped to exactly the userspace C sources.
+- `kernel/user/hello.asm` retired (deleted), replaced in place by
+  `kernel/user/hello.c` — same two messages, same `.data`/`.bss`
+  correctness check, same bounded `sys_nop` spin every existing
+  self-test already counted on.
+**Verification:** `make run` boots and prints every Milestone 1-23
+marker unchanged, including both `hello.elf` instances' exact messages
+(each exactly twice) — now produced by compiled C, confirmed via the
+build log showing a real `x86_64-elf-gcc` invocation on `hello.c`, not
+an accidental no-op. `readelf`/`nm` on the linked `hello.elf` confirmed
+`_start` at the expected `0x8000400000` with no truncated-relocation
+link errors before ever booting it. `-d int,cpu_reset` trace: unchanged
+from Milestone 23 (1 `#BP`, 3 `#PF`, zero double-fault/reset). All
+twenty-three earlier smoke tests and all four host test suites
+re-verified passing with ZERO assertion changes — the strongest
+possible regression signal for a runtime swap underneath an
+already-tested program. Correct on the first real boot attempt; booted
+4 times back to back, identical shape every time.
+**Design record:** `docs/adr/0024-userspace-c-runtime.md`.
+**Known limitation (accepted for this milestone only):** only two
+syscall arguments' worth of capacity (sufficient for every syscall this
+kernel has today); no `argv`/`envp`/heap allocator in the runtime yet —
+added only once a later GUI-arc milestone actually needs one.
 
-Milestone 24 is intentionally left as a one-line placeholder here — full
+## 25. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 25 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
-candidates from the post-Milestone-8 "build this into an OS" inventory:
-VMA tracking (a real per-process memory map instead of a few hardcoded
-regions — none of Milestones 21-23 needed it, but demand paging beyond
-fork's own sharing would), and a real sleep-queue/wake scheduler
-primitive generalizing Milestone 20's one-off `sys_wait`-specific
-blocking loop, once a second real caller motivates it (real IPC — pipes,
-shared memory, signals — would need exactly this) — a real pointer/arrow
-cursor shape and text-input caret (cosmetic polish on Milestone 23) —
-plus a disk driver + real filesystem, ACPI-based shutdown, and
-SMP/networking, all explicitly flagged to the user rather than started,
-still awaiting a decision. See `future.md` for a fuller continuation
-briefing.
+in sequence per `Desktop.md`'s GUI arc: a general blocking/wake
+scheduler primitive (generalizing Milestone 20's one-off `sys_wait`-
+specific blocking loop — a GUI event loop is the "second real caller"
+`future.md` flagged as the trigger), then an IPC primitive (likely also
+the real trigger for VMA tracking, deferred twice already for lack of a
+concrete consumer), then a minimal single-client display server, then
+multi-window/input-focus, then chrome/widgets, then real apps. See
+`Desktop.md` for the full sequencing and `future.md` for the rest of
+this project's continuation briefing. Separately, still awaiting the
+user's decision: a disk driver + real filesystem, ACPI-based shutdown,
+and SMP/networking, all explicitly flagged non-goals.
