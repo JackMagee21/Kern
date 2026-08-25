@@ -11,6 +11,7 @@
 #include "../drivers/pit.h"
 #include "../mm/heap.h"
 #include "../mm/vmm.h"
+#include "../ipc/shm.h" /* SHM_VIRT_BASE, Milestone 26 */
 #include "../panic.h"
 
 /*
@@ -95,6 +96,57 @@ static uint64_t reaped_count;
    concurrently") -- not a workaround pending real locks. */
 static task_t *collected_head;
 
+/* Milestone 26 (ADR 0026): a flat, fixed-capacity registry of every
+   currently-live task (any state -- READY, BLOCKED, or a ZOMBIE not
+   yet reaped), for pid -> task_t* lookup (scheduler_find_task()).
+   Sized generously for this hobby kernel's current scale (this boot
+   creates at most a couple dozen tasks total across its whole
+   lifetime, and only a handful are ever live simultaneously); panics
+   rather than silently dropping tracking if it's ever exhausted, the
+   same stance every other fixed-capacity table in this codebase
+   already takes (e.g. mouse.c's event queues drop, but those are lossy
+   BY DESIGN -- this one being silently wrong would mean a live task
+   becomes permanently unaddressable by pid, a real correctness gap,
+   not a lossy-by-design tradeoff). A linear scan on lookup/register/
+   unregister, not indexed by id: ids are never recycled
+   (next_task_id only increments, task.c), so indexing directly by id
+   would need an unboundedly growing array over a long uptime; a
+   bounded array of live SLOTS, scanned linearly, is simpler and
+   correct at this kernel's scale. */
+#define MAX_LIVE_TASKS 64
+static task_t *live_tasks[MAX_LIVE_TASKS];
+
+void scheduler_register_task(task_t *task)
+{
+    for (int i = 0; i < MAX_LIVE_TASKS; i++) {
+        if (live_tasks[i] == NULL) {
+            live_tasks[i] = task;
+            return;
+        }
+    }
+    panic("scheduler_register_task: live task registry full");
+}
+
+void scheduler_unregister_task(task_t *task)
+{
+    for (int i = 0; i < MAX_LIVE_TASKS; i++) {
+        if (live_tasks[i] == task) {
+            live_tasks[i] = NULL;
+            return;
+        }
+    }
+}
+
+task_t *scheduler_find_task(uint32_t id)
+{
+    for (int i = 0; i < MAX_LIVE_TASKS; i++) {
+        if (live_tasks[i] != NULL && live_tasks[i]->id == id) {
+            return live_tasks[i];
+        }
+    }
+    return NULL;
+}
+
 uint64_t scheduler_current_pml4;
 uint64_t scheduler_target_pml4;
 
@@ -168,6 +220,7 @@ static void reaper_task(void)
         reaped_count++;
 
         if (dead->parent_id == 0) {
+            scheduler_unregister_task(dead); /* Milestone 26: must happen before kfree(), or a future pid lookup could return a dangling pointer */
             kfree(dead); /* orphan -- nothing will ever scheduler_try_wait() for it */
         } else {
             __asm__ volatile("cli");
@@ -221,6 +274,7 @@ uint32_t scheduler_try_wait(uint32_t caller_id, uint32_t target_pid, uint64_t *o
     if (out_exit_code != NULL) {
         *out_exit_code = found->exit_code;
     }
+    scheduler_unregister_task(found); /* Milestone 26: must happen before kfree(), same reasoning as reaper_task's orphan path */
     kfree(found);
     return pid;
 }
@@ -243,6 +297,11 @@ void scheduler_init(void)
     bootstrap->parent_id = 0; /* never exits, never collected -- harmless default */
     bootstrap->exit_code = 0;
     bootstrap->saved_user_rsp = 0; /* never makes a syscall -- harmless default */
+    bootstrap->ipc_inbox_head = 0;
+    bootstrap->ipc_inbox_tail = 0;
+    bootstrap->shm_next_va = SHM_VIRT_BASE;
+
+    scheduler_register_task(bootstrap); /* Milestone 26 -- every task-creation path registers itself; this one bypasses scheduler_add_task(), so it does so directly here */
 
     current_task = bootstrap;
     scheduler_current_pml4 = bootstrap->pml4;

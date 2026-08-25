@@ -1281,15 +1281,97 @@ benefit this milestone needs); no timeout support; no
 priority/fairness policy for multiple tasks blocked on the same
 resource (no current caller has more than one yet).
 
-## 26. FS, SMP, and whatever's learned by then (sequence TBD)
+## 26. IPC message passing and shared memory — DONE
+Third step of the GUI arc (`Desktop.md`), following the userspace C
+runtime (Milestone 24) and the general blocking/wake primitive
+(Milestone 25). A display server and its client apps are genuinely
+separate, isolated processes (Milestone 9) — they need a way to
+exchange control messages and bulk pixel data without copying through
+a filesystem that doesn't exist.
+**Proves:** two genuinely isolated processes exchange a real message
+and a real block of shared physical memory — a known pattern written
+by one side is read back correctly by the other through a completely
+independent virtual address — with `sys_ipc_recv`'s blocking path
+verified as genuinely exercised, deterministically.
+**Deliverables:**
+- `kernel/sched/scheduler.h/.c`: a general `pid -> task_t*` lookup
+  (`scheduler_register_task()`/`scheduler_unregister_task()`/
+  `scheduler_find_task()`, a small fixed-capacity registry) — needed
+  because `sys_ipc_send` addresses its destination by pid, and unlike
+  every prior `task_t*` consumer, the destination could be
+  `TASK_BLOCKED` (unlinked from the ready queue, not searchable there
+  per Milestone 25's own design).
+- `kernel/ipc/ipc_message.h` (new): one shared wire-format struct,
+  included unmodified by both kernel and userspace runtime code.
+- `kernel/ipc/msgqueue.h/.c` (new): `ipc_send()`/`ipc_try_recv()`, a
+  small fixed-capacity inbox embedded directly in `task_t`.
+  `sys_ipc_recv` (`syscall.c`) layers blocking on top via
+  `scheduler_block_current()` — its first REAL consumer outside
+  Milestone 25's own self-test.
+- `kernel/ipc/shm.h/.c` (new): named shared-memory objects — small,
+  fixed-capacity, deliberately narrower than general VMA tracking
+  (`future.md`'s long-deferred item, whose actual trigger turned out
+  narrower than expected). Cleanup reuses `pmm.h`'s EXISTING
+  refcounting (Milestone 21's COW mechanism) via each mapper's own
+  `VMM_FLAG_OWNED` mapping — no new "destroy" API needed.
+- `kernel/sched/task.h/.c`: a per-task inbox and a per-task shm VA bump
+  allocator (`shm_next_va`) — independent per process, not a shared
+  global counter.
+- `kernel/arch/x86_64/syscall.h/.c`: `SYS_IPC_SEND`/`SYS_IPC_RECV`/
+  `SYS_SHM_CREATE`/`SYS_SHM_MAP`.
+- `kernel/user/rt/syscall.h/.c`: userspace wrappers.
+- `kernel/user/ipc_sender.c`/`ipc_receiver.c` (new): the actual demo —
+  `kernel_main` acts as a trusted "init," injecting a bootstrap message
+  (a kernel-side `ipc_send()` call, not a syscall) so the sender learns
+  the receiver's pid with no `argv`/`envp` yet.
+**Verification:** `make run` boots and prints every Milestone 1-25
+marker unchanged plus the new demo's markers in sequence, ending with
+`[OK] ipc self-test passed, sys_ipc_recv genuinely blocked (0x1
+turns)...`. **Three real bugs were found and fixed**, each from an
+actual observed symptom: (1) `ipc_sender.c` checked the wrong success/
+failure convention for `sys_ipc_send` (a genuine contradiction in the
+log — the sender reported failure yet the receiver still verified the
+correct pattern — pointed straight at the real bug); (2) a real frame
+leak, caught by the process-lifecycle self-test's exact-baseline check
+— `shm_map()`'s first draft double-counted the first mapper's own
+reference against `pmm_alloc_frame()`'s own implicit one; (3)
+`sys_ipc_recv_block_count` stayed 0 because `scheduler_add_task()`
+inserts each new task right after `current_task` (unchanged throughout
+`kernel_main`'s interrupts-off setup), so the LAST task added runs
+FIRST once preemption begins — the original receiver-then-sender
+creation order actually scheduled the sender first, letting it deliver
+before the receiver's first check. A fourth bug (`task_fork()`
+resetting a child's shm VA bump pointer, which would have collided with
+COW-inherited shm mappings) was caught in review before ever booting.
+`-d int,cpu_reset` trace (after all fixes): unchanged from Milestone
+25. `tests/qemu/test_ipc_shm_selftest.sh` (new) checks every marker,
+real sequencing, the exact reap count (7, up from 5 —
+`test_exec_selftest.sh`/`test_fork_wait_selftest.sh`/
+`test_process_lifecycle_selftest.sh` all needed this same assertion
+updated), and the frame-leak self-test. All twenty-four earlier smoke
+tests and all four host test suites re-verified passing. Booted 5 times
+back to back after the fixes — identical shape (including the exact
+block count) every time.
+**Design record:**
+`docs/adr/0026-ipc-message-passing-and-shared-memory.md` — including
+the full diagnostic trail for all four bugs.
+**Known limitation (accepted for this milestone only):** fixed-size,
+fixed-field-count messages only, no variable-length payload;
+`ipc_send()` drops silently on a full inbox (matching `mouse.c`'s own
+lossy-by-design event queues); shared-memory objects capped at 1MiB/
+process and 16 objects total; no priority/fairness policy for multiple
+tasks blocked on the same resource; `sys_ipc_recv` always blocks, no
+non-blocking variant.
 
-Milestone 26 is intentionally left as a one-line placeholder here — full
+## 27. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 27 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
-in sequence per `Desktop.md`'s GUI arc: an IPC primitive (likely also
-the real trigger for VMA tracking, deferred twice already for lack of a
-concrete consumer), then a minimal single-client display server, then
+in sequence per `Desktop.md`'s GUI arc: a minimal single-client display
+server (the actual hard-unknown milestone — prove the client-server
+model works at all before building multi-window logic on top), then
 multi-window/input-focus, then chrome/widgets, then real apps. See
 `Desktop.md` for the full sequencing and `future.md` for the rest of
 this project's continuation briefing. Separately, still awaiting the

@@ -64,17 +64,18 @@ if [ -z "$create_line" ] || [ -z "$child_line" ] || [ "$create_line" -ge "$child
     fail=1
 fi
 
-# Five processes total must be reaped: the two independent "hello"
+# Seven processes total must be reaped: the two independent "hello"
 # processes (Milestone 17), the fork demo's parent and its forked child,
-# and Milestone 22's exec demo process -- and the leak self-test must
-# have passed, proving the child's address space (copy-on-write shared
-# with the parent at fork time, ADR 0021 -- refcounted, not a fresh
-# unconditional pmm allocation per page) was fully reclaimed too, down
-# to the exact same baseline. Milestone 22 (ADR 0022) raised this from
-# 4 to 5.
+# Milestone 22's exec demo process, and Milestone 26's ipc demo sender/
+# receiver pair -- and the leak self-test must have passed, proving the
+# child's address space (copy-on-write shared with the parent at fork
+# time, ADR 0021 -- refcounted, not a fresh unconditional pmm allocation
+# per page) was fully reclaimed too, down to the exact same baseline.
+# Milestone 22 (ADR 0022) raised this from 4 to 5; Milestone 26 (ADR
+# 0026) raised it again, 5 to 7.
 reaped_count=$(grep -cF "exited and was reaped" "$SERIAL_LOG" 2>/dev/null || true)
-if [ "$reaped_count" -ne 5 ]; then
-    echo "FAIL: expected exactly 5 'exited and was reaped' messages, got $reaped_count" >&2
+if [ "$reaped_count" -ne 7 ]; then
+    echo "FAIL: expected exactly 7 'exited and was reaped' messages, got $reaped_count" >&2
     fail=1
 fi
 check "[OK] process lifecycle self-test passed, "

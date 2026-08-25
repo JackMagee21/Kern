@@ -21,6 +21,7 @@
 #include "mm/heap.h"
 #include "sched/scheduler.h"
 #include "sched/task.h"
+#include "ipc/msgqueue.h"
 #include "panic.h"
 #include "shell.h"
 
@@ -33,6 +34,10 @@ extern const uint8_t fork_demo_image_start[]; /* kernel/user/embed/fork_demo_blo
 extern const uint8_t fork_demo_image_end[];
 extern const uint8_t exec_demo_image_start[]; /* kernel/user/embed/exec_demo_blob.asm: embedded build/kernel/user/exec_demo.elf */
 extern const uint8_t exec_demo_image_end[];
+extern const uint8_t ipc_sender_image_start[]; /* kernel/user/embed/ipc_sender_blob.asm: embedded build/kernel/user/ipc_sender.elf */
+extern const uint8_t ipc_sender_image_end[];
+extern const uint8_t ipc_receiver_image_start[]; /* kernel/user/embed/ipc_receiver_blob.asm: embedded build/kernel/user/ipc_receiver.elf */
+extern const uint8_t ipc_receiver_image_end[];
 
 /* Milestone 6 self-test: two kernel threads that never voluntarily
    yield, proving the scheduler forcibly preempts a task that never
@@ -455,6 +460,46 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(exec_demo_process->id);
     console_write("\n");
 
+    /* Milestone 26 (ADR 0026): a SIXTH and SEVENTH orphan process,
+       proving IPC message-passing and shared memory work together,
+       end to end, across two genuinely isolated processes. The
+       RECEIVER is created LAST (after the sender), specifically so its
+       own sys_ipc_recv() call -- its very first action, no
+       prerequisite work at all -- is reliably the one that actually
+       blocks. This isn't just "probably" true: scheduler_add_task()
+       (kernel/sched/scheduler.c) inserts each new task immediately
+       after current_task, which stays the bootstrap task throughout
+       ALL of kernel_main's own setup code (interrupts are still off,
+       so nothing can preempt it yet) -- meaning the LAST task added
+       ends up as bootstrap->next, i.e. the very FIRST task actually
+       scheduled once preemption begins. Creating the receiver last
+       guarantees it gets that first turn, deterministically, before
+       the sender has had any chance to run and deliver anything --
+       found by reasoning through an actual observed self-test failure
+       (the ORIGINAL ordering, receiver created first, put the SENDER
+       first in the rotation instead, letting it finish its own send
+       before the receiver's first check -- so sys_ipc_recv_block_count
+       stayed 0, never exercising the blocking path this self-test
+       exists to prove) rather than assumed correct in advance.
+       kernel_main injects the bootstrap message directly via ipc_send()
+       (a kernel-side C call, not a syscall -- kernel_main is
+       trusted/privileged code acting as this demo's own "init") since
+       there's no argv/envp yet for the sender to otherwise learn the
+       receiver's pid; see kernel/user/ipc_sender.c's own doc comment. */
+    task_t *ipc_sender_process = task_create_user_image(ipc_sender_image_start, ipc_sender_image_end);
+    scheduler_add_task(ipc_sender_process);
+    task_t *ipc_receiver_process = task_create_user_image(ipc_receiver_image_start, ipc_receiver_image_end);
+    scheduler_add_task(ipc_receiver_process);
+    ipc_message_t ipc_boot_msg = { .fields = { ipc_receiver_process->id, 0, 0, 0 } };
+    if (!ipc_send(ipc_sender_process, &ipc_boot_msg)) {
+        panic("kernel_main: failed to inject the ipc demo's own bootstrap message (inbox somehow already full)");
+    }
+    console_write("[OK] ipc/shm demo processes created, sender pid 0x");
+    console_write_hex(ipc_sender_process->id);
+    console_write(", receiver pid 0x");
+    console_write_hex(ipc_receiver_process->id);
+    console_write("\n");
+
     keyboard_init();
     mouse_init();
     pic_clear_mask(0);  /* IRQ0: timer */
@@ -551,8 +596,16 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        a SIXTH task, but sys_exec reuses its own task_t/pid rather than
        creating a seventh -- one more reap total, not two, even though
        it runs a second image (exec_target.asm) before finally calling
-       sys_exit. */
-    while (scheduler_reaped_count() < 5) {
+       sys_exit. Milestone 26 (ADR 0026) raised the target again, 5 to
+       7: the ipc sender and receiver are two more genuinely distinct
+       processes. Their shared-memory object's frame is refcounted
+       (kernel/mm/pmm.h's pmm_frame_addref()/pmm_free_frame(), the same
+       mechanism COW fork already established, ADR 0021) via each
+       mapper's own VMM_FLAG_OWNED mapping -- it's only actually freed
+       back to the pmm once BOTH processes have exited and dropped
+       their own reference, so this baseline comparison only becomes
+       valid once all 7 reaps have happened, not before. */
+    while (scheduler_reaped_count() < 7) {
         __asm__ volatile("hlt");
     }
     uint64_t frames_after_reap = pmm_frames_free();
@@ -605,6 +658,24 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write("[OK] exec self-test passed, sys_exec replaced a running process's image 0x");
     console_write_hex(syscall_get_exec_count());
     console_write(" time(s) without creating a new process\n");
+
+    /* Milestone 26 (ADR 0026): proves sys_ipc_recv genuinely blocked at
+       least once this boot -- the ipc demo's receiver process's own
+       FIRST action is sys_ipc_recv(), with no prerequisite work at all
+       (unlike the sender, which must itself receive kernel_main's
+       bootstrap message first), so it is reliably the side that
+       actually blocks (see this file's own comment where both
+       processes were created). Same "prove the blocking path was
+       actually taken, not just that the right answer came back by
+       luck" pattern syscall_get_wait_block_count() already established
+       for sys_wait (ADR 0020) -- this is scheduler_block_current()'s
+       first REAL consumer outside its own Milestone 25 self-test. */
+    if (syscall_get_ipc_recv_block_count() == 0) {
+        panic("ipc self-test failed: sys_ipc_recv never actually blocked");
+    }
+    console_write("[OK] ipc self-test passed, sys_ipc_recv genuinely blocked (0x");
+    console_write_hex(syscall_get_ipc_recv_block_count());
+    console_write(" turns) before the sender's message arrived\n");
 
     /* Steady state: an interactive shell instead of a bare idle loop --
        this is what actually makes the kernel usable sitting at real

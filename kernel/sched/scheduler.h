@@ -100,4 +100,36 @@ void scheduler_block_current(void);
    redundant variant later. */
 void scheduler_wake(task_t *task);
 
+/* Milestone 26 (ADR 0026): a general pid -> task_t* lookup, usable
+   regardless of whether the target is TASK_READY or TASK_BLOCKED --
+   sys_ipc_send (kernel/arch/x86_64/syscall.c) needs to find a message's
+   destination task purely from a pid a caller supplied, and unlike
+   every OTHER consumer of a task_t* so far (scheduler_wake()'s own
+   callers, task_fork()'s parent access), it has no other way to get
+   one: the sender and receiver aren't necessarily parent/child (the
+   GUI arc's window server and its client apps are siblings, both
+   spawned directly by kernel_main), and a BLOCKED task (e.g. already
+   waiting on sys_ipc_recv for a PREVIOUS message) is, by Milestone 25's
+   own design, unlinked from the ready queue entirely -- not searchable
+   there. Backed by a small fixed-capacity registry
+   (scheduler_register_task()/scheduler_unregister_task(), called once
+   each from every task creation site and every task teardown site
+   respectively) rather than growing an already-existing list's role,
+   since neither the ready queue (only READY tasks) nor collected_head
+   (only reaped-but-uncollected zombies) covers "any live task,
+   whatever its current state." Returns NULL if no live task has that
+   id. */
+task_t *scheduler_find_task(uint32_t id);
+
+/* Registers/unregisters `task` in the pid lookup registry above.
+   MUST be called exactly once per task, at creation (before the task
+   could ever plausibly be an IPC target) and again at the point its
+   task_t is actually freed (kfree()'d) -- never left registered past
+   that point, or a future id lookup could return a dangling pointer.
+   Panics if the registry is ever full (a fixed-capacity array, sized
+   generously for this kernel's current scale -- see scheduler.c) rather
+   than silently failing to track a live task. */
+void scheduler_register_task(task_t *task);
+void scheduler_unregister_task(task_t *task);
+
 #endif /* KERNEL_SCHED_SCHEDULER_H */

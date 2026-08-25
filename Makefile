@@ -48,10 +48,12 @@ C_SOURCES := kernel/kernel.c kernel/panic.c kernel/shell.c kernel/drivers/serial
              kernel/arch/x86_64/gdt.c kernel/arch/x86_64/idt.c kernel/arch/x86_64/exceptions.c kernel/arch/x86_64/irq_dispatch.c \
              kernel/arch/x86_64/tss.c kernel/arch/x86_64/syscall.c kernel/arch/x86_64/reboot.c kernel/arch/x86_64/multiboot2.c \
              kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/heap.c kernel/mm/elf_loader.c \
+             kernel/ipc/msgqueue.c kernel/ipc/shm.c \
              kernel/sched/task.c kernel/sched/scheduler.c
 ASM_SOURCES := kernel/arch/x86_64/boot.asm kernel/arch/x86_64/gdt_flush.asm kernel/arch/x86_64/isr.asm kernel/arch/x86_64/irq.asm \
                kernel/arch/x86_64/syscall_entry.asm kernel/user/embed/user_elf_blob.asm kernel/user/embed/fork_demo_blob.asm \
-               kernel/user/embed/exec_demo_blob.asm kernel/user/embed/exec_target_blob.asm
+               kernel/user/embed/exec_demo_blob.asm kernel/user/embed/exec_target_blob.asm \
+               kernel/user/embed/ipc_sender_blob.asm kernel/user/embed/ipc_receiver_blob.asm
 
 C_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
 ASM_OBJECTS := $(patsubst %.asm,$(BUILD_DIR)/%.o,$(ASM_SOURCES))
@@ -78,6 +80,10 @@ EXEC_DEMO_ELF := $(BUILD_DIR)/kernel/user/exec_demo.elf
 EXEC_DEMO_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/exec_demo_blob.o
 EXEC_TARGET_ELF := $(BUILD_DIR)/kernel/user/exec_target.elf
 EXEC_TARGET_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/exec_target_blob.o
+IPC_SENDER_ELF := $(BUILD_DIR)/kernel/user/ipc_sender.elf
+IPC_SENDER_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/ipc_sender_blob.o
+IPC_RECEIVER_ELF := $(BUILD_DIR)/kernel/user/ipc_receiver.elf
+IPC_RECEIVER_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/ipc_receiver_blob.o
 
 # Milestone 24: the minimal userspace C runtime (Desktop.md) -- crt0
 # (asm, built via the ordinary $(BUILD_DIR)/%.o: %.asm rule below) plus
@@ -93,7 +99,7 @@ USER_RT_OBJECTS := $(USER_RT_ASM_OBJECTS) $(USER_RT_C_OBJECTS)
 # just hello.c for now, kernel/user/hello.asm's own rewrite proving the
 # runtime works (Desktop.md); the GUI arc's window server/apps join
 # this list as their own milestones land.
-USER_C_SOURCES := $(USER_RT_C_SOURCES) kernel/user/hello.c
+USER_C_SOURCES := $(USER_RT_C_SOURCES) kernel/user/hello.c kernel/user/ipc_sender.c kernel/user/ipc_receiver.c
 USER_C_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(USER_C_SOURCES))
 
 .PHONY: all run debug clean check-mb2
@@ -121,6 +127,8 @@ $(USER_ELF_BLOB_OBJ): $(USER_ELF)
 $(FORK_DEMO_BLOB_OBJ): $(FORK_DEMO_ELF)
 $(EXEC_DEMO_BLOB_OBJ): $(EXEC_DEMO_ELF)
 $(EXEC_TARGET_BLOB_OBJ): $(EXEC_TARGET_ELF)
+$(IPC_SENDER_BLOB_OBJ): $(IPC_SENDER_ELF)
+$(IPC_RECEIVER_BLOB_OBJ): $(IPC_RECEIVER_ELF)
 
 $(BUILD_DIR)/%.o: %.asm
 	@mkdir -p $(dir $@)
@@ -141,6 +149,14 @@ $(EXEC_DEMO_ELF): $(BUILD_DIR)/kernel/user/exec_demo.o kernel/user/user.ld
 $(EXEC_TARGET_ELF): $(BUILD_DIR)/kernel/user/exec_target.o kernel/user/user.ld
 	@mkdir -p $(dir $@)
 	$(LD) -T kernel/user/user.ld --nostdlib -o $@ $(BUILD_DIR)/kernel/user/exec_target.o
+
+$(IPC_SENDER_ELF): $(BUILD_DIR)/kernel/user/ipc_sender.o $(USER_RT_OBJECTS) kernel/user/user.ld
+	@mkdir -p $(dir $@)
+	$(LD) -T kernel/user/user.ld --nostdlib -o $@ $(USER_RT_OBJECTS) $(BUILD_DIR)/kernel/user/ipc_sender.o
+
+$(IPC_RECEIVER_ELF): $(BUILD_DIR)/kernel/user/ipc_receiver.o $(USER_RT_OBJECTS) kernel/user/user.ld
+	@mkdir -p $(dir $@)
+	$(LD) -T kernel/user/user.ld --nostdlib -o $@ $(USER_RT_OBJECTS) $(BUILD_DIR)/kernel/user/ipc_receiver.o
 
 $(KERNEL_ELF): $(OBJECTS) boot/linker.ld
 	$(CC) $(LDFLAGS) $(OBJECTS) -o $@ -lgcc

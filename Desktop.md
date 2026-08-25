@@ -91,14 +91,17 @@ each one is needed now, not a deliverables list.
    task to wake. `sys_wait` itself was deliberately NOT rewired onto
    this yet (no concrete benefit needed for that on its own); Milestone
    26's IPC is the primitive's first real consumer.
-3. **An IPC primitive.** Message passing and/or shared-memory mapping
-   between two processes — the display server and a client need to
-   exchange both control messages (open a window, here's an input
-   event) and pixel data without copying through a file that doesn't
-   exist. This is also the likely real trigger for VMA tracking
-   (deferred twice already for lack of a concrete consumer) — a shared
-   region needs real per-region bookkeeping beyond the current fixed
-   hardcoded VA slots per process.
+3. **An IPC primitive — DONE (Milestone 26, ADR 0026).** Message
+   passing (`kernel/ipc/msgqueue.c`, a per-task inbox) and named
+   shared-memory objects (`kernel/ipc/shm.c`) between two processes,
+   proven end to end by a sender/receiver demo pair. Turned out
+   narrower than general VMA tracking after all — a small, fixed-
+   capacity named-object table was sufficient, so `future.md`'s
+   long-deferred VMA item stays deferred; cleanup reuses the EXISTING
+   COW frame-refcounting (ADR 0021) rather than new machinery. Needed a
+   new `pid -> task_t*` registry (`scheduler_find_task()`) since a
+   blocked IPC destination isn't searchable in the ready queue. Four
+   real bugs found and fixed — see ADR 0026.
 4. **A minimal display server, one client, no overlap.** The actual
    hard-unknown milestone: prove the client-server model works at all.
    One server process owns the framebuffer; a client asks for a

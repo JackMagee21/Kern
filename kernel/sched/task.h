@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "../arch/x86_64/syscall.h" /* syscall_frame_t -- task_fork()'s parent_frame parameter, Milestone 18 */
+#include "../ipc/ipc_message.h" /* ipc_message_t -- ipc_inbox, Milestone 26 */
 
 /* rsp points at a saved context (trap_frame_t for a kernel task,
    syscall/interrupt-preempted or synthetic either way) -- either a
@@ -91,6 +92,17 @@ typedef enum {
     TASK_BLOCKED,
 } task_state_t;
 
+/* Milestone 26 (ADR 0026): a small, fixed-capacity per-task inbox --
+   embedded directly in task_t (not a separate kmalloc'd structure)
+   since every task, kernel thread or ring-3 process, gets one, and the
+   overhead (8 messages * 40 bytes = 320 bytes) is trivial next to a
+   kmalloc'd task_t generally. Single-producer-per-send/single-consumer
+   ring buffer, same shape as kernel/drivers/mouse.c's own event
+   queues -- ipc_send() (kernel/ipc/msgqueue.c) is the only writer of a
+   given task's head, that task's own sys_ipc_recv is the only reader
+   of its tail. */
+#define IPC_INBOX_CAPACITY 8
+
 typedef struct task {
     uint64_t rsp;
     uint64_t kernel_stack_top;
@@ -103,6 +115,16 @@ typedef struct task {
     uint32_t parent_id;
     uint64_t exit_code;
     uint64_t saved_user_rsp;
+    ipc_message_t ipc_inbox[IPC_INBOX_CAPACITY];
+    uint32_t ipc_inbox_head; /* next write index */
+    uint32_t ipc_inbox_tail; /* next read index */
+    uint64_t shm_next_va; /* Milestone 26 (ADR 0026): this task's OWN monotonic bump
+                              pointer for shared-memory mappings (kernel/ipc/shm.c) --
+                              per-task, not a single kernel-wide counter, so one
+                              process's own mapping count can never affect where
+                              ANOTHER process's next mapping lands in ITS OWN,
+                              independent address space. Initialized to
+                              SHM_VIRT_BASE (shm.c) at task creation. */
 } task_t;
 
 /* 16KiB per task, fixed. CLAUDE.md: know the stack size for every

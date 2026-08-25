@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include "syscall.h"
@@ -7,6 +8,8 @@
 #include "../../mm/vmm.h"
 #include "../../sched/scheduler.h"
 #include "../../sched/task.h"
+#include "../../ipc/msgqueue.h"
+#include "../../ipc/shm.h"
 
 /*
  * MSR numbers and the STAR encoding verified against Linux's own
@@ -197,6 +200,101 @@ static void sys_exec(syscall_frame_t *frame)
     sys_exec_count++;
 }
 
+/* Milestone 26 (ADR 0026): incremented once per turn sys_ipc_recv's
+   blocking loop actually calls scheduler_block_current() without a
+   message already waiting -- see syscall.h's doc comment on
+   syscall_get_ipc_recv_block_count(). */
+static uint64_t sys_ipc_recv_block_count;
+
+/* rdi = destination pid, rsi = pointer to an ipc_message_t-shaped
+   struct in the caller's OWN user memory (validated before copying it
+   INTO the kernel, same "validate then copy by value" discipline
+   sys_write already established). sender_pid is overwritten with the
+   ACTUAL caller's own id here, in the kernel -- never trusted from
+   whatever the caller's own struct happened to contain, the same
+   "don't trust a user-supplied identity claim" stance this codebase
+   already applies elsewhere (e.g. sys_wait never trusts a caller-
+   supplied parent_id, it reads the real one off task_t). Fails (-1)
+   if msg_ptr isn't a validated user pointer, dest_pid names no live
+   task (scheduler_find_task()), or dest's inbox is currently full
+   (ipc_send()'s own documented drop-on-full contract). */
+static void sys_ipc_send(syscall_frame_t *frame)
+{
+    uint64_t dest_pid = frame->rdi;
+    uint64_t msg_ptr = frame->rsi;
+
+    if (!vmm_is_user_range(msg_ptr, sizeof(ipc_message_t))) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    task_t *dest = scheduler_find_task((uint32_t)dest_pid);
+    if (dest == NULL) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    ipc_message_t msg = *(const ipc_message_t *)(uintptr_t)msg_ptr;
+    msg.sender_pid = scheduler_current_task()->id;
+
+    if (!ipc_send(dest, &msg)) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+    frame->rax = 0;
+}
+
+/* rdi = pointer to write the received ipc_message_t into (the caller's
+   OWN user memory, validated up front -- the message itself is only
+   ever written there once one has actually arrived, so there's no
+   partial-write-then-fail case to worry about). ALWAYS blocks until a
+   message arrives -- no non-blocking variant is exposed yet, since
+   nothing this milestone needs one (a real event loop always wants to
+   block here; YAGNI on a poll-style variant until something actually
+   needs it). This is scheduler_block_current()'s first REAL consumer
+   outside its own Milestone 25 self-test. */
+static void sys_ipc_recv(syscall_frame_t *frame)
+{
+    uint64_t out_ptr = frame->rdi;
+    if (!vmm_is_user_range(out_ptr, sizeof(ipc_message_t))) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    task_t *self = scheduler_current_task();
+    ipc_message_t msg;
+    while (!ipc_try_recv(self, &msg)) {
+        sys_ipc_recv_block_count++;
+        scheduler_block_current();
+    }
+
+    *(ipc_message_t *)(uintptr_t)out_ptr = msg;
+    frame->rax = 0;
+}
+
+/* rdi = requested size in bytes. Returns a new shm object id in rax, or
+   0 on failure (bad size, or the object table is full -- see
+   shm_create()'s own doc comment, kernel/ipc/shm.h). The CALLER still
+   has to call sys_shm_map() itself afterward to actually get a usable
+   pointer -- creating does not implicitly map, see shm.h for why. */
+static void sys_shm_create(syscall_frame_t *frame)
+{
+    uint64_t size = frame->rdi;
+    frame->rax = shm_create(size);
+}
+
+/* rdi = an shm object id (from sys_shm_create(), or learned from
+   another process via a real IPC message -- e.g. Desktop.md's own
+   handoff self-test). Returns the mapped virtual address in the
+   CALLER's own address space in rax, or 0 on failure (unknown id, or
+   this process's own shm VA budget exhausted). */
+static void sys_shm_map(syscall_frame_t *frame)
+{
+    uint32_t shm_id = (uint32_t)frame->rdi;
+    task_t *current = scheduler_current_task();
+    frame->rax = shm_map(shm_id, current, NULL);
+}
+
 void syscall_dispatch(syscall_frame_t *frame)
 {
     syscall_count++;
@@ -220,6 +318,18 @@ void syscall_dispatch(syscall_frame_t *frame)
     case SYS_EXEC:
         sys_exec(frame);
         break;
+    case SYS_IPC_SEND:
+        sys_ipc_send(frame);
+        break;
+    case SYS_IPC_RECV:
+        sys_ipc_recv(frame);
+        break;
+    case SYS_SHM_CREATE:
+        sys_shm_create(frame);
+        break;
+    case SYS_SHM_MAP:
+        sys_shm_map(frame);
+        break;
     default:
         frame->rax = (uint64_t)-1;
         break;
@@ -239,4 +349,9 @@ uint64_t syscall_get_wait_block_count(void)
 uint64_t syscall_get_exec_count(void)
 {
     return sys_exec_count;
+}
+
+uint64_t syscall_get_ipc_recv_block_count(void)
+{
+    return sys_ipc_recv_block_count;
 }

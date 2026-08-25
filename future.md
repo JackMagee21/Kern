@@ -17,11 +17,11 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 25 (2026-08-25)
+## State as of Milestone 26 (2026-08-25)
 
 **GUI arc in progress** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
-with the user). Milestones 24-25 (below) are the first two steps.
+with the user). Milestones 24-26 (below) are the first three steps.
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -210,7 +210,26 @@ the design reasoning and any real bugs found along the way.
     (deliberate scope boundary — no concrete benefit needed yet). See
     ADR 0025.
 
-**Testing state:** 24 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+26. **IPC message passing and shared memory** — two genuinely isolated
+    processes (`kernel/user/ipc_sender.c`/`ipc_receiver.c`) exchange a
+    real message (`kernel/ipc/msgqueue.c`, a per-task inbox +
+    `scheduler_block_current()`'s first REAL consumer) and a real block
+    of shared physical memory (`kernel/ipc/shm.c`, named objects —
+    deliberately narrower than general VMA tracking, whose actual
+    trigger turned out narrower than `future.md` had speculated).
+    Cleanup reuses `pmm.h`'s existing COW refcounting (ADR 0021) rather
+    than a new destroy API. A new `pid -> task_t*` registry
+    (`scheduler_find_task()`) was needed since a blocked IPC
+    destination isn't in the ready queue to search. Four real bugs
+    found and fixed this milestone (three from live boot symptoms, one
+    caught in review) — see ADR 0026 for the full diagnostic trail,
+    including a genuine contradiction in the log (sender reported
+    failure, receiver still verified success) that pointed straight at
+    an inverted return-value check, and a scheduling-order assumption
+    that turned out backwards (`scheduler_add_task()` makes the LAST
+    task added run FIRST, not the first). See ADR 0026.
+
+**Testing state:** 25 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Almost every milestone has its own dedicated smoke
 test (Milestone 24 is the one exception — see item 24 above for why
@@ -218,23 +237,34 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** nineteen milestones
-(9-25) all followed the same pattern — implement, boot in QEMU for
+**A note on process discipline that held up well:** twenty milestones
+(9-26) all followed the same pattern — implement, boot in QEMU for
 real, fix what actually breaks, write the ADR describing what was
 tried and what was learned (including dead ends), commit in small
 logical pieces. Milestones 10-15, 17-19, 21-22, and 24 all landed
 correctly on the first real boot; Milestone 9 (per-process address
-spaces), Milestone 16 (PS/2 mouse), and Milestone 25 (blocking/wake
-primitive) each hit real bugs that needed real diagnosis (not guessing)
-to fix — all are documented in detail in their ADRs (0009, 0016, 0025)
-specifically so the diagnostic *method*, not just the fix, is preserved
-for next time something in this territory breaks. Milestone 25's own
-bug is worth naming specifically: the boot didn't just fail one
-assertion, it froze SOLID (every unrelated task's progress stopped
-dead) — recognizing that a total, machine-wide freeze (not an isolated
-test failure) was the actual diagnostic signal is what pointed straight
-at "interrupts got permanently disabled" rather than a logic bug local
-to the new test. Milestone 20 is its own diagnosis story worth naming
+spaces), Milestone 16 (PS/2 mouse), Milestone 25 (blocking/wake
+primitive), and Milestone 26 (IPC/shm) each hit real bugs that needed
+real diagnosis (not guessing) to fix — all are documented in detail in
+their ADRs (0009, 0016, 0025, 0026) specifically so the diagnostic
+*method*, not just the fix, is preserved for next time something in
+this territory breaks. Milestone 26 found FOUR separate bugs in one
+milestone, its own kind of record so far — worth naming because each
+was found a DIFFERENT way: an inverted return-value check caught by
+noticing a genuine contradiction in the log (sender reported failure,
+receiver still verified success — impossible unless the check itself
+was wrong); a frame leak caught by the process-lifecycle self-test's
+own exact-baseline assertion; a scheduling-order assumption
+(receiver-blocks-first) that turned out backwards, caught by the
+blocking-path self-test's own zero-count panic; and a shm-VA-reset bug
+in `task_fork()` caught in review, reasoning through what the EXISTING
+COW mechanism would do to a NEW field, before ever booting. Milestone
+25's own bug is worth naming specifically too: the boot didn't just
+fail one assertion, it froze SOLID (every unrelated task's progress
+stopped dead) — recognizing that a total, machine-wide freeze (not an
+isolated test failure) was the actual diagnostic signal is what pointed
+straight at "interrupts got permanently disabled" rather than a logic
+bug local to the new test. Milestone 20 is its own diagnosis story worth naming
 separately: the `saved_user_rsp` bug (see item 20 above) was never
 observed as a live QEMU failure — it was found by reasoning through
 what "another task's syscall can now genuinely interleave" implies
@@ -288,12 +318,12 @@ signal CLAUDE.md asks for before this territory gets touched.
 ## Reasonable next steps (not flagged, not started)
 
 The main line of "what's next" is now `Desktop.md`'s GUI arc (Milestones
-24-25 done; Milestone 26 = an IPC primitive — likely the real trigger
-for VMA tracking, deferred twice already for lack of a concrete
-consumer — then a minimal display server, then multi-window/input-
-focus, then chrome/widgets, then real apps). A real path-based `execve`
-remains blocked on the filesystem non-goal, which `Desktop.md`'s scope
-confirmation keeps deferred for this whole arc.
+24-26 done; Milestone 27 = a minimal single-client display server — the
+actual hard-unknown milestone, proving the client-server model works
+at all before multi-window logic goes on top — then multi-window/
+input-focus, then chrome/widgets, then real apps). A real path-based
+`execve` remains blocked on the filesystem non-goal, which `Desktop.md`'s
+scope confirmation keeps deferred for this whole arc.
 
 A few smaller items outside that arc, not touching a non-goal:
 

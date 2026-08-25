@@ -20,12 +20,16 @@ typedef struct __attribute__((packed)) {
     uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
 } syscall_frame_t;
 
-#define SYS_NOP   0
-#define SYS_WRITE 1
-#define SYS_EXIT  2
-#define SYS_FORK  3
-#define SYS_WAIT  4
-#define SYS_EXEC  5
+#define SYS_NOP        0
+#define SYS_WRITE      1
+#define SYS_EXIT       2
+#define SYS_FORK       3
+#define SYS_WAIT       4
+#define SYS_EXEC       5
+#define SYS_IPC_SEND   6
+#define SYS_IPC_RECV   7
+#define SYS_SHM_CREATE 8
+#define SYS_SHM_MAP    9
 
 /* Programs STAR/LSTAR/SFMASK and sets EFER.SCE. Must run after
    gdt_init() (STAR encodes GDT selector offsets) and tss_init().
@@ -78,6 +82,15 @@ uint64_t syscall_get_wait_block_count(void);
    NEW behavior was actually exercised" pattern syscall_get_wait_block_
    count()/vmm_get_cow_fault_count() already established). */
 uint64_t syscall_get_exec_count(void);
+
+/* Milestone 26 (ADR 0026): how many times sys_ipc_recv's blocking loop
+   actually called scheduler_block_current() without a message already
+   waiting -- see syscall.c's doc comment. Same "prove the blocking path
+   was actually taken, not just that the right answer came back by
+   luck" pattern syscall_get_wait_block_count() already established for
+   sys_wait (ADR 0020); this is the primitive's first REAL consumer
+   outside its own Milestone 25 self-test. */
+uint64_t syscall_get_ipc_recv_block_count(void);
 
 /* Milestone 18 (ADR 0018); storage moved to the current task itself in
    Milestone 20 (ADR 0020) -- the calling process's user-mode RSP at the

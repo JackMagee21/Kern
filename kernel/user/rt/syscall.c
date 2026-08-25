@@ -55,3 +55,23 @@ void sys_nop(void)
 {
     syscall2(0, 0, 0);
 }
+
+uint64_t sys_ipc_send(uint64_t dest_pid, const ipc_message_t *msg)
+{
+    return syscall2(6, dest_pid, (uint64_t)(uintptr_t)msg);
+}
+
+void sys_ipc_recv(ipc_message_t *out)
+{
+    syscall2(7, (uint64_t)(uintptr_t)out, 0);
+}
+
+uint64_t sys_shm_create(uint64_t size)
+{
+    return syscall2(8, size, 0);
+}
+
+uint64_t sys_shm_map(uint64_t shm_id)
+{
+    return syscall2(9, shm_id, 0);
+}

@@ -1,6 +1,8 @@
 #include <stdint.h>
 
 #include "task.h"
+#include "scheduler.h" /* scheduler_register_task(), Milestone 26 -- same directory, task.c only (not task.h), no circular include */
+#include "../ipc/shm.h" /* SHM_VIRT_BASE, Milestone 26 */
 #include "../arch/x86_64/trap_frame.h"
 #include "../arch/x86_64/gdt.h"
 #include "../mm/heap.h"
@@ -105,6 +107,10 @@ task_t *task_create(void (*entry)(void))
     task->parent_id = 0; /* kernel threads never exit and are never forked -- harmless default */
     task->exit_code = 0;
     task->saved_user_rsp = 0; /* never makes a syscall -- harmless default */
+    task->ipc_inbox_head = 0;
+    task->ipc_inbox_tail = 0;
+    task->shm_next_va = SHM_VIRT_BASE;
+    scheduler_register_task(task); /* Milestone 26 -- NOT inside scheduler_add_task(): that function is also reused by scheduler_wake() to relink an already-registered blocked task, which must NOT re-register */
     return task;
 }
 
@@ -216,6 +222,10 @@ task_t *task_create_user_image(const uint8_t *image_start, const uint8_t *image_
     task->parent_id = 0; /* spawned directly by kernel_main -- orphan, nothing will ever wait() for it */
     task->exit_code = 0;
     task->saved_user_rsp = 0; /* set for real by syscall_entry.asm the first time this task syscalls */
+    task->ipc_inbox_head = 0;
+    task->ipc_inbox_tail = 0;
+    task->shm_next_va = SHM_VIRT_BASE;
+    scheduler_register_task(task); /* Milestone 26, see task_create()'s identical call for why not inside scheduler_add_task() */
     return task;
 }
 
@@ -291,6 +301,19 @@ task_t *task_fork(task_t *parent, const syscall_frame_t *parent_frame, uint64_t 
     child->parent_id = parent->id;
     child->exit_code = 0;
     child->saved_user_rsp = 0; /* set for real by syscall_entry.asm the first time the child syscalls */
+    child->ipc_inbox_head = 0; /* a fresh, empty inbox -- the parent's own pending messages are its own conversation, not duplicated */
+    child->ipc_inbox_tail = 0;
+    /* NOT reset to SHM_VIRT_BASE: the vmm_for_each_user_page() walk
+       above (fork_share_page) doesn't distinguish which subsystem
+       created a mapping -- any shm object the PARENT already had
+       mapped gets COW-shared into the child exactly like its stack or
+       code does, at the SAME virtual addresses. child's own bump
+       pointer must therefore start where the parent's left off, not at
+       SHM_VIRT_BASE, or a later shm_map() in the child would try to
+       reuse an address that's already occupied by an inherited mapping
+       and hit shm_map()'s own "fresh VA range" panic. */
+    child->shm_next_va = parent->shm_next_va;
+    scheduler_register_task(child); /* Milestone 26, see task_create()'s identical call for why not inside scheduler_add_task() */
     return child;
 }
 

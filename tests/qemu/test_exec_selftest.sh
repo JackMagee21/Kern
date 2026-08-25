@@ -73,15 +73,16 @@ if grep -qF "exec self-test failed" "$SERIAL_LOG" 2>/dev/null; then
 fi
 
 # The strongest proof that exec reused its caller's OWN process rather
-# than creating a new one: exactly 5 "exited and was reaped" lines total
+# than creating a new one: exactly 7 "exited and was reaped" lines total
 # this boot (2 hello + fork demo's parent + its forked child + the exec
-# demo process, reaped ONCE despite running two images) -- if sys_exec
-# had instead spawned a genuinely new task while leaving the old one
-# dangling, this count would be wrong (either 6, if both somehow exited,
-# or stuck below 5 forever, if the old one never resumed and hung).
+# demo process, reaped ONCE despite running two images + the ipc demo's
+# sender and receiver, Milestone 26/ADR 0026) -- if sys_exec had instead
+# spawned a genuinely new task while leaving the old one dangling, this
+# count would be wrong (either 8, if both somehow exited, or stuck below
+# 7 forever, if the old one never resumed and hung).
 reaped_count=$(grep -cF "exited and was reaped" "$SERIAL_LOG" 2>/dev/null || true)
-if [ "$reaped_count" -ne 5 ]; then
-    echo "FAIL: expected exactly 5 'exited and was reaped' messages, got $reaped_count" >&2
+if [ "$reaped_count" -ne 7 ]; then
+    echo "FAIL: expected exactly 7 'exited and was reaped' messages, got $reaped_count" >&2
     fail=1
 fi
 
