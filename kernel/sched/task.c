@@ -293,3 +293,83 @@ task_t *task_fork(task_t *parent, const syscall_frame_t *parent_frame, uint64_t 
     child->saved_user_rsp = 0; /* set for real by syscall_entry.asm the first time the child syscalls */
     return child;
 }
+
+/* Milestone 22 (ADR 0022): the small fixed table of images sys_exec can
+   target -- no filesystem exists to load an arbitrary path from, so
+   "which program" is just an index into whatever this kernel build
+   happens to embed, the same closed-world constraint task_create_user()
+   already accepts for process creation. Written specifically to prove
+   exec's own defining behavior (kernel/user/exec_demo.asm execs into
+   this; kernel/user/exec_target.asm is what it becomes) -- neither
+   hello.asm nor fork_demo.asm was written with "being exec'd into" in
+   mind (their own self-tests count their own messages an exact number
+   of times, which a shared target would silently perturb). */
+extern const uint8_t exec_target_image_start[]; /* kernel/sched/exec_target_blob.asm */
+extern const uint8_t exec_target_image_end[];
+
+#define EXEC_PROGRAM_TARGET 0u
+
+static bool exec_lookup_image(uint32_t program_id, const uint8_t **out_start, const uint8_t **out_end)
+{
+    switch (program_id) {
+    case EXEC_PROGRAM_TARGET:
+        *out_start = exec_target_image_start;
+        *out_end = exec_target_image_end;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool task_exec(task_t *task, syscall_frame_t *frame, uint32_t program_id)
+{
+    const uint8_t *image_start;
+    const uint8_t *image_end;
+    if (!exec_lookup_image(program_id, &image_start, &image_end)) {
+        return false; /* bad program_id: a real input-validation outcome, nothing touched yet */
+    }
+
+    /* Tear down every existing process-private mapping in THIS task's
+       OWN address space -- safe to walk/free while it's still the
+       active CR3 specifically because vmm_reset_user_address_space()
+       invlpg's each leaf it clears (see vmm.c); reusable immediately
+       afterward by elf_load()'s fresh vmm_map_page_in() calls below. */
+    vmm_reset_user_address_space(task->pml4);
+
+    uint64_t image_size = (uint64_t)(uintptr_t)image_end - (uint64_t)(uintptr_t)image_start;
+    uint64_t entry_point;
+    if (!elf_load(task->pml4, image_start, image_size, &entry_point)) {
+        panic("task_exec: embedded exec-target image failed validation");
+    }
+
+    /* Fresh user stack -- the old one (if any survived the reset above;
+       it always does, since the stack is process-private and OWNED) is
+       already gone. Identical construction to task_create_user_image()'s
+       own user-stack mapping. */
+    for (uint64_t off = 0; off < USER_STACK_SIZE; off += PMM_FRAME_SIZE) {
+        uint64_t stack_frame = pmm_alloc_frame();
+        if (stack_frame == 0) {
+            panic("task_exec: pmm exhausted mapping the new user stack");
+        }
+        if (!vmm_map_page_in(task->pml4, USER_STACK_VIRT_BASE + off, stack_frame, VMM_FLAG_USER | VMM_FLAG_WRITABLE | VMM_FLAG_OWNED | VMM_FLAG_NX)) {
+            panic("task_exec: failed to map the new user stack");
+        }
+    }
+
+    /* Overwrite the CURRENT syscall's own saved frame with the new
+       image's entry context -- syscall_entry.asm's exit path pops
+       rcx/r11 from exactly these fields and uses them, unmodified, as
+       SYSRET's return RIP/RFLAGS (see syscall_frame_t's doc comment,
+       syscall.h): it has no notion of "the same program" to violate, so
+       no new control-flow primitive is needed to resume into a DIFFERENT
+       one. Designated-initializer default zeroes every OTHER field
+       (including rax) -- a fresh program shouldn't see the old image's
+       leftover register state. */
+    *frame = (syscall_frame_t){
+        .rcx = entry_point,
+        .r11 = 0x202, /* bit 1: always-1 reserved bit. bit 9: IF=1 */
+    };
+    task->saved_user_rsp = USER_STACK_VIRT_BASE + USER_STACK_SIZE;
+
+    return true;
+}

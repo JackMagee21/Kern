@@ -299,6 +299,24 @@ void vmm_fork_cow_page(uint64_t dest_pml4, uint64_t va, uint64_t phys, uint64_t 
    allocation-failure panic in this codebase already takes). */
 bool vmm_handle_cow_fault(uint64_t fault_addr);
 
+/* Milestone 22 (ADR 0022, sys_exec): frees every present, process-private
+   leaf mapping in pml4_phys's region (PML4 entries 1-510, the identical
+   range vmm_destroy_address_space() walks), pmm_free_frame()-ing each
+   OWNED leaf's target and every PDPT/PD/PT frame the walk finds -- but,
+   unlike vmm_destroy_address_space(), does NOT free the PML4 frame
+   itself, and MUST be called on the CURRENTLY ACTIVE address space (the
+   opposite requirement -- destroy's contract requires the target NOT be
+   active). Safe specifically because every leaf it unmaps gets an
+   invlpg for its own reconstructed virtual address as part of the same
+   walk (see vmm.c), so nothing it just cleared is left stale in the TLB
+   for the caller to immediately re-map on top of. Used by task_exec()
+   (kernel/sched/task.c) to reset a process's address space back to
+   empty before elf_load()-ing a new image into the SAME pml4/task_t --
+   the "same process, new image" semantic that distinguishes exec from
+   fork+exit. Panics on the same unexpected-huge-page condition
+   vmm_destroy_address_space() already guards against. */
+void vmm_reset_user_address_space(uint64_t pml4_phys);
+
 /* Milestone 21 (ADR 0021): total number of COW faults
    vmm_handle_cow_fault() has actually resolved (either branch) so far
    -- lets kernel_main's self-test prove COW pages are genuinely

@@ -61,6 +61,10 @@ static uint64_t syscall_count;
    for their own milestones). */
 static uint64_t sys_wait_block_count;
 
+/* Milestone 22 (ADR 0022): incremented once per successful task_exec()
+   -- see syscall.h's doc comment on syscall_get_exec_count(). */
+static uint64_t sys_exec_count;
+
 uint64_t syscall_get_user_rsp(void)
 {
     return *syscall_user_rsp_slot;
@@ -169,6 +173,30 @@ static void sys_wait(syscall_frame_t *frame)
     frame->rax = reaped_pid;
 }
 
+/* Milestone 22 (ADR 0022): rdi = program_id, an index into task.c's own
+   small fixed table of embedded images (no filesystem exists to load an
+   arbitrary path from). On success, task_exec() has already overwritten
+   *frame in place with the new image's entry context (rcx/r11) and
+   zeroed every other GPR -- this function's ONLY remaining job is the
+   count and letting syscall_dispatch fall through to the ordinary
+   sysretq epilogue, which now resumes into the DIFFERENT program rather
+   than the one that made this syscall. On failure (bad program_id),
+   *frame is untouched by task_exec() -- just report -1 in rax, same as
+   any other validated-input syscall failure, and the OLD image resumes
+   normally. */
+static void sys_exec(syscall_frame_t *frame)
+{
+    task_t *current = scheduler_current_task();
+    uint32_t program_id = (uint32_t)frame->rdi;
+
+    if (!task_exec(current, frame, program_id)) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    sys_exec_count++;
+}
+
 void syscall_dispatch(syscall_frame_t *frame)
 {
     syscall_count++;
@@ -189,6 +217,9 @@ void syscall_dispatch(syscall_frame_t *frame)
     case SYS_WAIT:
         sys_wait(frame);
         break;
+    case SYS_EXEC:
+        sys_exec(frame);
+        break;
     default:
         frame->rax = (uint64_t)-1;
         break;
@@ -203,4 +234,9 @@ uint64_t syscall_get_count(void)
 uint64_t syscall_get_wait_block_count(void)
 {
     return sys_wait_block_count;
+}
+
+uint64_t syscall_get_exec_count(void)
+{
+    return sys_exec_count;
 }

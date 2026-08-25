@@ -999,25 +999,96 @@ item). `frame_refcount[]` is `uint16_t` — a single frame shared by more
 than 65535 concurrent address spaces would silently wrap, accepted as
 unreachable at this kernel's current scale.
 
-## 22. FS, SMP, and whatever's learned by then (sequence TBD)
+## 22. `sys_exec` — DONE
+Motivated by Milestone 18's own named limitation (ADR 0018) and
+`future.md`'s "reasonable next steps": `sys_fork` gave a process the
+ability to spawn a child, but no way to replace its OWN running image
+with a different one — the other half of the fork/exec pair.
+`future.md` had flagged this as needing "a genuinely NEW control-flow
+primitive, a synchronous mid-syscall resume via `iretq`" — re-reading
+`syscall_entry.asm` before writing any code found that assumption was
+wrong (see Decision).
+**Proves:** a ring-3 process can `sys_exec` into a completely different
+embedded program and have that program's code genuinely start running
+in its OWN, SAME process (same `task_t`, same pid, same PML4 frame) —
+not a new process, and not a no-op that only appeared to work.
+**Deliverables:**
+- `kernel/mm/vmm.h/.c`: `vmm_reset_user_address_space()`, a new sibling
+  of `vmm_destroy_address_space()` with the OPPOSITE activity
+  requirement — MUST be called on the CURRENTLY ACTIVE address space
+  (destroy's contract requires the target NOT be active). Both now share
+  one factored-out walk (`free_process_private_frames()`, a pure
+  refactor of destroy's existing loop) that additionally `invlpg`s each
+  leaf's own reconstructed VA as it's cleared — a no-op for destroy
+  (target already inactive), load-bearing for reset (nothing stale is
+  left in the TLB for `elf_load()`'s subsequent mappings to be shadowed
+  by).
+- `kernel/sched/task.h/.c`: `task_exec()` — validates the requested
+  `program_id` against a small fixed table BEFORE tearing anything down
+  (a bad id leaves the process completely untouched), then
+  `vmm_reset_user_address_space()`s the caller's own address space,
+  `elf_load()`s the new image into it, maps a fresh user stack, and
+  overwrites the CURRENT syscall's own `syscall_frame_t` in place
+  (`rcx` = new `e_entry`, `r11` = fresh RFLAGS, every other GPR zeroed)
+  plus `task->saved_user_rsp` — no assembly changed; `syscall_entry.asm`'s
+  existing `sysretq` epilogue just resumes into whatever `rcx`/`r11`/the
+  per-task RSP now say, which happens to be a different program this
+  time.
+- `kernel/arch/x86_64/syscall.h/.c`: `SYS_EXEC` (5); `sys_exec()` (thin
+  wrapper — reports -1 on a bad `program_id`, otherwise counts the
+  success via `syscall_get_exec_count()`).
+- `kernel/user/exec_demo.asm`, `kernel/user/exec_target.asm` (new, both
+  embedded via the established `incbin` blob pattern): two genuinely
+  DIFFERENT programs — not a reuse of `hello.elf`/`fork_demo.elf`, whose
+  own self-tests count their own messages an exact number of times.
+- `kernel/kernel.c`: a fifth orphan process (`exec_demo_process`); new
+  self-test panics if `syscall_get_exec_count()` is ever 0; the process-
+  lifecycle reap-count threshold raised from 4 to 5 (exec reuses its
+  caller's own task, not a sixth new one).
+**Verification:** `make run` boots and prints every Milestone 1-21
+marker unchanged plus `[OK] exec demo process created...` → `[OK] exec
+demo running, about to sys_exec into a new image` → `[OK] exec target
+running -- process image was genuinely replaced by sys_exec` → (later)
+exactly one `[OK] process 0x7 exited and was reaped` line (same pid,
+proving reuse, not creation) → `[OK] exec self-test passed...`.
+`-d int,cpu_reset` trace: still exactly 3 `#PF` events (unchanged from
+Milestone 21 — `sys_exec`'s reset-and-repopulate cycle never faults),
+zero double-fault/reset. `tests/qemu/test_exec_selftest.sh` (new)
+independently checks real sequencing, absence of the demo's own
+`[FAIL]` marker, the exact reap count (5, not 6), and the frame-leak
+self-test. `test_fork_wait_selftest.sh`/`test_process_lifecycle_selftest.sh`
+needed their exact reaped-count assertion updated (4 → 4→5, scope
+growth, not a behavior fix). All twenty-one earlier smoke tests and all
+four host test suites re-verified passing. Correct on the first real
+boot attempt; booted 5 times back to back, exec-specific sequence and
+every count identical every time.
+**Design record:** `docs/adr/0022-sys-exec.md` — including the full
+reasoning for why the originally-feared new control-flow primitive
+turned out to be unnecessary.
+**Known limitation (accepted for this milestone only):** can only
+target a small, fixed, build-time-embedded set of images (currently
+one) — no filesystem exists for a real path-based `execve`. No
+argv/envp-equivalent is passed across the swap (every GPR is zeroed,
+matching this kernel's existing "programs take no arguments"
+convention). A bad `program_id` is the only validated-input failure
+path; an ELF64 validation failure on the embedded target image still
+panics (build-time-trusted, same stance `task_create_user_image()`
+already takes).
 
-Milestone 22 is intentionally left as a one-line placeholder here — full
+## 23. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 23 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
-a `sys_exec`-equivalent syscall (now that both a real loader, Milestone
-17, and real child processes, Milestone 18, exist to combine — though
-building it will need a genuinely new control-flow primitive, a
-synchronous mid-syscall resume that bypasses the normal `sysretq` path,
-flagged here rather than attempted casually), VMA tracking (a real
-per-process memory map instead of a few hardcoded regions — Milestone
-21's COW fork didn't need it, but demand paging beyond fork's own
-sharing would), and a real sleep-queue/wake scheduler primitive
-generalizing Milestone 20's one-off `sys_wait`-specific blocking loop,
-once a second real caller motivates it (real IPC — pipes, shared
-memory, signals — would need exactly this) — plus a disk driver + real
-filesystem, ACPI-based shutdown, and SMP/networking, all explicitly
-flagged to the user rather
+VMA tracking (a real per-process memory map instead of a few hardcoded
+regions — neither Milestone 21's COW fork nor Milestone 22's `sys_exec`
+needed it, but demand paging beyond fork's own sharing would), and a
+real sleep-queue/wake scheduler primitive generalizing Milestone 20's
+one-off `sys_wait`-specific blocking loop, once a second real caller
+motivates it (real IPC — pipes, shared memory, signals — would need
+exactly this) — plus a disk driver + real filesystem, ACPI-based
+shutdown, and SMP/networking, all explicitly flagged to the user rather
 than started, still awaiting a decision. See `future.md` for a fuller
 continuation briefing.

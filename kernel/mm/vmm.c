@@ -358,10 +358,22 @@ uint64_t vmm_create_address_space(void)
     return new_pml4_frame;
 }
 
-void vmm_destroy_address_space(uint64_t pml4_phys)
+/* Milestone 22 (ADR 0022): shared walk behind both
+   vmm_destroy_address_space() and vmm_reset_user_address_space() --
+   frees every present, process-private leaf's OWNED target frame plus
+   every PDPT/PD/PT frame the walk finds, and clears each freed PML4[i]
+   slot to 0 (harmless for destroy, which frees the whole PML4 frame
+   right after anyway; load-bearing for reset, which doesn't). Also
+   invlpg's every leaf's own reconstructed virtual address as it's
+   cleared (same VA-reconstruction arithmetic vmm_for_each_user_page()
+   already uses) -- a no-op if this pml4 isn't the currently active one
+   (destroy's case: the caller's own CR3 switch away from it already
+   flushed anything that would have been stale), but necessary if it IS
+   (reset's case: this address space is still CR3 while its own mappings
+   are being cleared out from under it) so nothing just freed here is
+   left stale in the TLB for the caller to immediately map over. */
+static void free_process_private_frames(uint64_t *pml4)
 {
-    uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_phys;
-
     for (uint64_t i = 0; i < ENTRIES_PER_TABLE; i++) {
         if (i == 0 || i == 511) {
             continue; /* shared with the kernel and every other address space -- never freed here */
@@ -378,7 +390,7 @@ void vmm_destroy_address_space(uint64_t pml4_phys)
                 continue;
             }
             if (pdpte & PTE_PS) {
-                panic("vmm_destroy_address_space: unexpected 1GiB page in a process-private mapping");
+                panic("free_process_private_frames: unexpected 1GiB page in a process-private mapping");
             }
             uint64_t *pd = (uint64_t *)(uintptr_t)(pdpte & PTE_ADDR_MASK);
 
@@ -388,7 +400,7 @@ void vmm_destroy_address_space(uint64_t pml4_phys)
                     continue;
                 }
                 if (pde & PTE_PS) {
-                    panic("vmm_destroy_address_space: unexpected 2MiB page in a process-private mapping");
+                    panic("free_process_private_frames: unexpected 2MiB page in a process-private mapping");
                 }
                 uint64_t *pt = (uint64_t *)(uintptr_t)(pde & PTE_ADDR_MASK);
 
@@ -400,15 +412,29 @@ void vmm_destroy_address_space(uint64_t pml4_phys)
                     if (pte & VMM_FLAG_OWNED) {
                         pmm_free_frame(pte & PTE_ADDR_MASK);
                     }
+                    uint64_t va = (i << 39) | (j << 30) | (k << 21) | (l << 12);
+                    __asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
                 }
                 pmm_free_frame((uint64_t)(uintptr_t)pt);
             }
             pmm_free_frame((uint64_t)(uintptr_t)pd);
         }
         pmm_free_frame((uint64_t)(uintptr_t)pdpt);
+        pml4[i] = 0;
     }
+}
 
+void vmm_destroy_address_space(uint64_t pml4_phys)
+{
+    uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_phys;
+    free_process_private_frames(pml4);
     pmm_free_frame(pml4_phys);
+}
+
+void vmm_reset_user_address_space(uint64_t pml4_phys)
+{
+    uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_phys;
+    free_process_private_frames(pml4);
 }
 
 bool vmm_translate(uint64_t virt_addr, uint64_t *out_phys)

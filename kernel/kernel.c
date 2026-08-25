@@ -29,6 +29,8 @@
 
 extern const uint8_t fork_demo_image_start[]; /* kernel/sched/fork_demo_blob.asm: embedded build/kernel/user/fork_demo.elf */
 extern const uint8_t fork_demo_image_end[];
+extern const uint8_t exec_demo_image_start[]; /* kernel/sched/exec_demo_blob.asm: embedded build/kernel/user/exec_demo.elf */
+extern const uint8_t exec_demo_image_end[];
 
 /* Milestone 6 self-test: two kernel threads that never voluntarily
    yield, proving the scheduler forcibly preempts a task that never
@@ -346,6 +348,19 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(fork_demo_process->id);
     console_write("\n");
 
+    /* Milestone 22 (ADR 0022): a FIFTH orphan process whose own job is
+       to sys_exec into a completely different embedded image at
+       runtime (kernel/user/exec_demo.asm -> exec_target.asm). Unlike
+       fork, this does NOT create a sixth task -- the same task_t/pid
+       just ends up running different code, which is exactly what the
+       process lifecycle self-test's reap-count check below now proves
+       (raised from 4 to 5, not 6). */
+    task_t *exec_demo_process = task_create_user_image(exec_demo_image_start, exec_demo_image_end);
+    scheduler_add_task(exec_demo_process);
+    console_write("[OK] exec demo process created, pid 0x");
+    console_write_hex(exec_demo_process->id);
+    console_write("\n");
+
     keyboard_init();
     mouse_init();
     pic_clear_mask(0);  /* IRQ0: timer */
@@ -416,8 +431,13 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        process_b), and that process's own runtime-forked child is a
        FIFTH task whose resources must also come back before this
        baseline comparison is valid -- 2 hello processes + the fork
-       demo's own exit + its forked child's exit. */
-    while (scheduler_reaped_count() < 4) {
+       demo's own exit + its forked child's exit. Milestone 22 (ADR
+       0022) raised the target again, 4 to 5: the exec demo process is
+       a SIXTH task, but sys_exec reuses its own task_t/pid rather than
+       creating a seventh -- one more reap total, not two, even though
+       it runs a second image (exec_target.asm) before finally calling
+       sys_exit. */
+    while (scheduler_reaped_count() < 5) {
         __asm__ volatile("hlt");
     }
     uint64_t frames_after_reap = pmm_frames_free();
@@ -456,6 +476,20 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write("[OK] copy-on-write self-test passed, ");
     console_write_hex(vmm_get_cow_fault_count());
     console_write(" page(s) copied lazily on first write, not eagerly at fork time\n");
+
+    /* Milestone 22 (ADR 0022): proves sys_exec genuinely resolved into a
+       real image swap at least once this boot, not just that the
+       syscall dispatched without crashing -- a bad program_id would
+       return -1 without ever incrementing this counter. The reap-count
+       check above (raised to 5, not 6) already proved the STRONGER
+       "same process, not a new one" property; this proves the exec
+       actually happened via the syscall path specifically. */
+    if (syscall_get_exec_count() == 0) {
+        panic("exec self-test failed: sys_exec never actually replaced a process image");
+    }
+    console_write("[OK] exec self-test passed, sys_exec replaced a running process's image 0x");
+    console_write_hex(syscall_get_exec_count());
+    console_write(" time(s) without creating a new process\n");
 
     /* Steady state: an interactive shell instead of a bare idle loop --
        this is what actually makes the kernel usable sitting at real

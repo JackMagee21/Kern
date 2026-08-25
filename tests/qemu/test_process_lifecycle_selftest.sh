@@ -37,14 +37,18 @@ check "[OK] process lifecycle self-test passed, "
 check "matches pre-creation baseline"
 
 # Every ring-3 process kernel_main creates must actually have been
-# reaped -- exactly four distinct "exited and was reaped" lines (the
-# two hello processes, Milestone 18's fork/wait demo process, and the
-# child it forks at runtime), not fewer (sys_exit/reaping not landing
-# for all of them) and not more (nothing else in this milestone's
-# self-tests exits). Milestone 18 (ADR 0018) raised this from 2 to 4.
+# reaped -- exactly five distinct "exited and was reaped" lines (the
+# two hello processes, Milestone 18's fork/wait demo process, the child
+# it forks at runtime, and Milestone 22's exec demo process), not fewer
+# (sys_exit/reaping not landing for all of them) and not more (nothing
+# else in this milestone's self-tests exits, and sys_exec reuses its
+# caller's own task_t/pid rather than creating a new one -- one reap for
+# the exec demo process, not two, even though it runs a second image
+# before finally exiting). Milestone 18 (ADR 0018) raised this from 2 to
+# 4; Milestone 22 (ADR 0022) raised it again, 4 to 5.
 reaped_count=$(grep -cF "exited and was reaped" "$SERIAL_LOG" 2>/dev/null || true)
-if [ "$reaped_count" -ne 4 ]; then
-    echo "FAIL: expected exactly 4 'exited and was reaped' messages, got $reaped_count" >&2
+if [ "$reaped_count" -ne 5 ]; then
+    echo "FAIL: expected exactly 5 'exited and was reaped' messages, got $reaped_count" >&2
     fail=1
 fi
 

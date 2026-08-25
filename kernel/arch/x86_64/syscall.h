@@ -25,6 +25,7 @@ typedef struct __attribute__((packed)) {
 #define SYS_EXIT  2
 #define SYS_FORK  3
 #define SYS_WAIT  4
+#define SYS_EXEC  5
 
 /* Programs STAR/LSTAR/SFMASK and sets EFER.SCE. Must run after
    gdt_init() (STAR encodes GDT selector offsets) and tss_init().
@@ -67,6 +68,16 @@ uint64_t syscall_get_count(void);
    ready), which kernel_main's self-test treats as a failure: it would
    mean this milestone's behavior wasn't actually exercised. */
 uint64_t syscall_get_wait_block_count(void);
+
+/* Milestone 22 (ADR 0022): how many times sys_exec has successfully
+   replaced the calling process's image (task_exec(), kernel/sched/
+   task.c, returned true) -- lets kernel_main's self-test prove sys_exec
+   actually resolved into a real image swap at least once this boot, not
+   just that the syscall dispatched without crashing (a bad program_id
+   would return -1 without ever incrementing this, the same "prove the
+   NEW behavior was actually exercised" pattern syscall_get_wait_block_
+   count()/vmm_get_cow_fault_count() already established). */
+uint64_t syscall_get_exec_count(void);
 
 /* Milestone 18 (ADR 0018); storage moved to the current task itself in
    Milestone 20 (ADR 0020) -- the calling process's user-mode RSP at the

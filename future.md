@@ -17,7 +17,7 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 21 (2026-08-25)
+## State as of Milestone 22 (2026-08-25)
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -124,18 +124,41 @@ the design reasoning and any real bugs found along the way.
     self-test (`vmm_get_cow_fault_count()`) proves sharing was
     genuinely lazy, not just correct. See ADR 0021.
 
-**Testing state:** 21 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+22. **`sys_exec`** — `task_exec()` (`kernel/sched/task.c`) replaces the
+    CALLING process's own running image with a different embedded
+    program, reusing the SAME `task_t`/pid/PML4 frame rather than
+    creating a new process — the property that distinguishes exec from
+    fork+exit, verified via `kernel_main`'s reap-count accounting (5,
+    not 6). `vmm_reset_user_address_space()` (`kernel/mm/vmm.c`), a new
+    sibling of `vmm_destroy_address_space()` with the OPPOSITE activity
+    requirement (must run on the CURRENTLY ACTIVE address space, not an
+    inactive one), tears down every existing mapping first; `elf_load()`
+    then populates the (now-empty) address space with the new image.
+    Resumes through the EXISTING `sysretq` epilogue with zero assembly
+    changes — `task_exec()` just overwrites the current syscall's own
+    saved frame (`rcx`=new entry, `r11`=fresh RFLAGS, every other GPR
+    zeroed) plus the per-task saved user RSP; this was the milestone's
+    own real finding — `future.md` had originally flagged `sys_exec` as
+    needing a brand new `iretq`-based control-flow primitive, and
+    re-reading `syscall_entry.asm` before writing any code found that
+    assumption was wrong (see ADR 0022). Two new, genuinely distinct
+    embedded programs (`kernel/user/exec_demo.asm`/`exec_target.asm`) —
+    deliberately not a reuse of `hello.elf`/`fork_demo.elf`, whose own
+    self-tests count their own messages an exact number of times. See
+    ADR 0022.
+
+**Testing state:** 22 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Every milestone has its own dedicated smoke test; run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** fifteen milestones
-(9-21) all followed the same pattern — implement, boot in QEMU for
+**A note on process discipline that held up well:** sixteen milestones
+(9-22) all followed the same pattern — implement, boot in QEMU for
 real, fix what actually breaks, write the ADR describing what was
 tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15 and 17-21 all landed correctly on
-the first real boot; Milestone 9 (per-process address spaces) and
+logical pieces. Milestones 10-15, 17-19, and 21-22 all landed correctly
+on the first real boot; Milestone 9 (per-process address spaces) and
 Milestone 16 (PS/2 mouse) each hit one genuine bug that needed real
 diagnosis (not guessing) to fix — both are documented in detail in
 their ADRs (0009, 0016) specifically so the diagnostic *method*, not
@@ -155,7 +178,13 @@ genuinely expected, resolved-and-resumed exception rather than always
 fatal — verified not just by the self-test passing but by hand-counting
 the EXACT number of faults a `-d int,cpu_reset` trace should show (3)
 and confirming the trace matched that precise number, not just "some
-faults happened and nothing crashed."
+faults happened and nothing crashed." Milestone 22 is its own kind of
+story worth naming too: it's the first milestone where the CORRECT
+design turned out to be simpler than what an earlier session (this
+same `future.md`, before Milestone 22 started) had predicted was
+necessary — re-reading the actual assembly before trusting that
+prediction is what found the simpler path, rather than building the
+more complex "obviously needed" primitive on faith.
 
 ## Explicitly flagged, NOT started — needs your decision
 
@@ -181,42 +210,23 @@ These don't touch a non-goal and were the natural next items on the
 "build this into an OS" list this session worked through one at a
 time:
 
-- **A `sys_exec`-equivalent syscall — flagged here as GENUINELY HARDER
-  than it looks, not just another syscall.** Milestone 18 gave a
-  running process the ability to fork; it still can't replace its own
-  image with a different one, and `elf_load()`
-  (`kernel/mm/elf_loader.c`, Milestone 17) doesn't care who invokes
-  it — tearing down and rebuilding the calling process's mappings
-  (`vmm_for_each_user_page()`-style walk, Milestone 18, or a new
-  sibling of `vmm_destroy_address_space()` that resets a region without
-  freeing the PML4 itself) is the tractable half. The HARD half,
-  discovered while scoping this as this session's next milestone before
-  deliberately deferring it: `sys_exec` can never resume through the
-  normal `sysretq` epilogue `syscall_entry.asm` always takes, because
-  the OLD program (and its stack) is gone — it needs a genuinely NEW
-  control-flow primitive, a synchronous mid-syscall resume via `iretq`
-  into the freshly loaded image's entry point, built and installed
-  entirely within the syscall handler itself (unlike `sys_exit`, which
-  sidesteps this by never resuming ANYTHING again, or `sys_fork`, which
-  builds its synthetic frame for a DIFFERENT, not-yet-running task).
-  Also needs the reset+repopulate sequence to happen with interrupts
-  still masked throughout (already true for the whole syscall, but
-  worth stating explicitly: a timer tick landing mid-repopulation would
-  see a half-built address space) and a full TLB flush (`CR3` reload)
-  before ever resuming, since the new mappings can reuse virtual
-  addresses the old ones held with DIFFERENT physical frames. Would also
-  need at least a second meaningfully-different embedded program to
-  select between (there are two now, `hello.asm`/`fork_demo.asm`, but
-  neither was written with "being exec'd into" in mind). Worth reading
-  ADR 0009's CR3-switch-timing bug again before attempting this — it's
-  the closest prior art in this codebase for "state must be fully
-  consistent before you can safely resume through it."
 - **VMAs — a real per-process memory map instead of a few hardcoded
-  regions.** Milestone 21 shipped COW fork (ADR 0021) without needing
-  this (the existing `vmm_for_each_user_page()`/PTE-flag approach was
-  enough), but any FURTHER demand-paging work beyond fork's own lazy
-  sharing (a genuinely on-demand-allocated heap/mmap-equivalent region,
-  precise per-region permission tracking) would need one.
+  regions.** Neither Milestone 21's COW fork (ADR 0021) nor Milestone
+  22's `sys_exec` (ADR 0022) needed this (the existing
+  `vmm_for_each_user_page()`/PTE-flag approach, and `sys_exec`'s own
+  reset-the-whole-private-region approach, were both enough), but any
+  FURTHER demand-paging work beyond what those two already do (a
+  genuinely on-demand-allocated heap/mmap-equivalent region, precise
+  per-region permission tracking, a real path-based `execve` that needs
+  to know a region's own bounds) would need one.
+- **A real path-based `execve`, once a filesystem exists.** Milestone
+  22's `sys_exec` (ADR 0022) can only target one of a small, fixed,
+  build-time-embedded set of images (`kernel/sched/task.c`'s
+  `exec_lookup_image()`) — there's no filesystem to load an arbitrary
+  path from yet. The actual image-swap mechanism
+  (`vmm_reset_user_address_space()` + `elf_load()` + overwriting the
+  syscall's own saved frame) doesn't need to change for this; only the
+  "which bytes" half does.
 - **A real sleep-queue/wake scheduler primitive.** Milestone 20 made
   `sys_wait` genuinely blocking (ADR 0020), but deliberately via a
   one-off `sti; hlt; cli` retry loop scoped to just that syscall, not a

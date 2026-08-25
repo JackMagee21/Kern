@@ -1,6 +1,7 @@
 #ifndef KERNEL_SCHED_TASK_H
 #define KERNEL_SCHED_TASK_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "../arch/x86_64/syscall.h" /* syscall_frame_t -- task_fork()'s parent_frame parameter, Milestone 18 */
@@ -177,5 +178,39 @@ task_t *task_create_user(void);
    bad user input; it only reflects the ALREADY-VALIDATED parent's own
    memory back into a new table). */
 task_t *task_fork(task_t *parent, const syscall_frame_t *parent_frame, uint64_t parent_user_rsp);
+
+/* Milestone 22 (ADR 0022): replaces `task`'s CURRENTLY RUNNING image with
+   a different embedded program (program_id -- see task.c's
+   exec_lookup_image() for the small fixed table; no filesystem exists to
+   load an arbitrary path from), reusing the SAME task_t/pid/pml4 rather
+   than creating a new process -- this is the property that distinguishes
+   exec from fork+exit. Must only ever be called from sys_exec (kernel/
+   arch/x86_64/syscall.c) while `task` is the scheduler's current_task
+   and `frame` is that exact syscall's saved GPRs (SYSCALL never switches
+   CR3, so `task`'s own address space is guaranteed still active here --
+   the same invariant task_fork() already relies on).
+
+   On success: tears down every existing process-private mapping
+   (vmm_reset_user_address_space()), elf_load()s the new image into the
+   now-empty address space, maps a fresh user stack, and overwrites
+   *frame in place with the new image's entry context -- rcx = e_entry
+   (SYSRET's return RIP), r11 = a fresh RFLAGS (IF=1), every OTHER GPR
+   (including rax) deliberately zeroed via designated-initializer default
+   (a new program shouldn't see the old image's leftover register
+   state), plus task->saved_user_rsp = the new stack's top. No new
+   control-flow primitive is needed for this to actually resume into the
+   new program: syscall_entry.asm's ordinary sysretq epilogue restores
+   RCX/R11/RSP from exactly these fields regardless of what a handler set
+   them to -- it has no notion of "the same program" to violate. Returns
+   true. Returns false (frame left completely untouched, nothing torn
+   down) if program_id doesn't match any embedded image -- a real,
+   expected bad-input outcome, not a kernel bug, so the caller can safely
+   fall through to sys_exec's normal error-return path and let the OLD
+   image keep running. Panics (not a false return) if the embedded
+   image itself fails ELF64 validation -- every image this repo embeds is
+   built by its own Makefile/user.ld, so that would mean the build itself
+   is broken, matching task_create_user_image()'s identical stance -- or
+   on any allocation/mapping failure while building the new stack. */
+bool task_exec(task_t *task, syscall_frame_t *frame, uint32_t program_id);
 
 #endif /* KERNEL_SCHED_TASK_H */

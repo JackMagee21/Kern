@@ -8,8 +8,11 @@
 # neither syscall crashed the kernel. sys_wait became genuinely
 # blocking in Milestone 20 (ADR 0020, test_blocking_wait_selftest.sh)
 # and fork's address-space sharing became copy-on-write in Milestone 21
-# (ADR 0021, test_cow_fork_selftest.sh); this test's own assertions are
-# implementation-agnostic and didn't need to change either time.
+# (ADR 0021, test_cow_fork_selftest.sh); this test's own assertions were
+# implementation-agnostic and didn't need to change for either. Milestone
+# 22's sys_exec (ADR 0022, test_exec_selftest.sh) is unrelated to fork/
+# wait but shares kernel_main's process-count bookkeeping, so it DID
+# need this test's reaped-process-count assertion updated (4 -> 5).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -61,15 +64,17 @@ if [ -z "$create_line" ] || [ -z "$child_line" ] || [ "$create_line" -ge "$child
     fail=1
 fi
 
-# Four processes total must be reaped: the two independent "hello"
-# processes (Milestone 17) plus the fork demo's parent and its forked
-# child -- and the leak self-test must have passed, proving the child's
-# address space (copy-on-write shared with the parent at fork time,
-# ADR 0021 -- refcounted, not a fresh unconditional pmm allocation per
-# page) was fully reclaimed too, down to the exact same baseline.
+# Five processes total must be reaped: the two independent "hello"
+# processes (Milestone 17), the fork demo's parent and its forked child,
+# and Milestone 22's exec demo process -- and the leak self-test must
+# have passed, proving the child's address space (copy-on-write shared
+# with the parent at fork time, ADR 0021 -- refcounted, not a fresh
+# unconditional pmm allocation per page) was fully reclaimed too, down
+# to the exact same baseline. Milestone 22 (ADR 0022) raised this from
+# 4 to 5.
 reaped_count=$(grep -cF "exited and was reaped" "$SERIAL_LOG" 2>/dev/null || true)
-if [ "$reaped_count" -ne 4 ]; then
-    echo "FAIL: expected exactly 4 'exited and was reaped' messages, got $reaped_count" >&2
+if [ "$reaped_count" -ne 5 ]; then
+    echo "FAIL: expected exactly 5 'exited and was reaped' messages, got $reaped_count" >&2
     fail=1
 fi
 check "[OK] process lifecycle self-test passed, "
