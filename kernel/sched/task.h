@@ -139,7 +139,7 @@ void task_free_kernel_stack(uint64_t base, uint64_t size);
 task_t *task_create_user_image(const uint8_t *image_start, const uint8_t *image_end);
 
 /* Thin wrapper: task_create_user_image() with the embedded
-   kernel/user/hello.asm image (kernel/sched/user_elf_blob.asm) --
+   kernel/user/hello.asm image (kernel/user/embed/user_elf_blob.asm) --
    preserved as its own name since this is what every pre-Milestone-18
    call site (kernel_main's two "hello" processes) already uses, and
    what most of this codebase's own doc comments still refer to by this

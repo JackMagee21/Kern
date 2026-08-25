@@ -29,8 +29,8 @@ C_SOURCES := kernel/kernel.c kernel/panic.c kernel/shell.c kernel/drivers/serial
              kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/heap.c kernel/mm/elf_loader.c \
              kernel/sched/task.c kernel/sched/scheduler.c
 ASM_SOURCES := kernel/arch/x86_64/boot.asm kernel/arch/x86_64/gdt_flush.asm kernel/arch/x86_64/isr.asm kernel/arch/x86_64/irq.asm \
-               kernel/arch/x86_64/syscall_entry.asm kernel/sched/user_elf_blob.asm kernel/sched/fork_demo_blob.asm \
-               kernel/sched/exec_demo_blob.asm kernel/sched/exec_target_blob.asm
+               kernel/arch/x86_64/syscall_entry.asm kernel/user/embed/user_elf_blob.asm kernel/user/embed/fork_demo_blob.asm \
+               kernel/user/embed/exec_demo_blob.asm kernel/user/embed/exec_target_blob.asm
 
 C_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
 ASM_OBJECTS := $(patsubst %.asm,$(BUILD_DIR)/%.o,$(ASM_SOURCES))
@@ -42,16 +42,21 @@ OS_ISO := $(BUILD_DIR)/os.iso
 # Milestone 17/18: embedded userspace ELF64 executables (kernel/user/
 # *.asm + user.ld) -- completely separate links (plain `x86_64-elf-ld
 # -T`, no kernel CFLAGS/LDFLAGS: ring-3 user code, not kernel code) that
-# must each exist BEFORE the matching kernel/sched/*_blob.asm is
+# must each exist BEFORE the matching kernel/user/embed/*_blob.asm is
 # assembled, since its `incbin` reads the file's raw bytes directly.
+# Milestone 24: blob-embedding files moved from kernel/sched/ (an
+# artifact of when each was first added, not a deliberate placement) to
+# kernel/user/embed/ -- "embed this program into the kernel image" is a
+# userspace-packaging concern, not a scheduler one, and this scales much
+# better once the GUI arc's window server + multiple apps all need one.
 USER_ELF := $(BUILD_DIR)/kernel/user/hello.elf
-USER_ELF_BLOB_OBJ := $(BUILD_DIR)/kernel/sched/user_elf_blob.o
+USER_ELF_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/user_elf_blob.o
 FORK_DEMO_ELF := $(BUILD_DIR)/kernel/user/fork_demo.elf
-FORK_DEMO_BLOB_OBJ := $(BUILD_DIR)/kernel/sched/fork_demo_blob.o
+FORK_DEMO_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/fork_demo_blob.o
 EXEC_DEMO_ELF := $(BUILD_DIR)/kernel/user/exec_demo.elf
-EXEC_DEMO_BLOB_OBJ := $(BUILD_DIR)/kernel/sched/exec_demo_blob.o
+EXEC_DEMO_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/exec_demo_blob.o
 EXEC_TARGET_ELF := $(BUILD_DIR)/kernel/user/exec_target.elf
-EXEC_TARGET_BLOB_OBJ := $(BUILD_DIR)/kernel/sched/exec_target_blob.o
+EXEC_TARGET_BLOB_OBJ := $(BUILD_DIR)/kernel/user/embed/exec_target_blob.o
 
 .PHONY: all run debug clean check-mb2
 
@@ -101,8 +106,9 @@ $(OS_ISO): $(KERNEL_ELF) boot/grub.cfg check-mb2
 
 # WSLg confirmed working on this machine (DISPLAY/WAYLAND_DISPLAY set,
 # /tmp/.X11-unix/X0 present) and qemu-ui-gtk is installed, so `run`/
-# `debug` open a real GTK window showing the VGA console -- serial
-# still goes to this terminal via -serial stdio. Every automated QEMU
+# `debug` open a real GTK window showing the graphics framebuffer
+# console (kernel/drivers/fbconsole.c, Milestone 23) -- serial still
+# goes to this terminal via -serial stdio. Every automated QEMU
 # smoke test (tests/qemu/*.sh) invokes qemu-system-x86_64 directly with
 # its own -display none, so this doesn't touch CI/test behavior.
 run: $(OS_ISO)

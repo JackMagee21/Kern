@@ -121,7 +121,7 @@ task_t *task_create(void (*entry)(void))
 #define USER_STACK_SIZE      (16u * 1024u)
 #define USER_KERNEL_STACK_SIZE (16u * 1024u)
 
-extern const uint8_t user_elf_image_start[]; /* kernel/sched/user_elf_blob.asm: embedded build/kernel/user/hello.elf */
+extern const uint8_t user_elf_image_start[]; /* kernel/user/embed/user_elf_blob.asm: embedded build/kernel/user/hello.elf */
 extern const uint8_t user_elf_image_end[];
 
 task_t *task_create_user_image(const uint8_t *image_start, const uint8_t *image_end)
@@ -304,7 +304,7 @@ task_t *task_fork(task_t *parent, const syscall_frame_t *parent_frame, uint64_t 
    hello.asm nor fork_demo.asm was written with "being exec'd into" in
    mind (their own self-tests count their own messages an exact number
    of times, which a shared target would silently perturb). */
-extern const uint8_t exec_target_image_start[]; /* kernel/sched/exec_target_blob.asm */
+extern const uint8_t exec_target_image_start[]; /* kernel/user/embed/exec_target_blob.asm */
 extern const uint8_t exec_target_image_end[];
 
 #define EXEC_PROGRAM_TARGET 0u

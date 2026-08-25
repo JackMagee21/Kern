@@ -29,9 +29,9 @@
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289u
 
-extern const uint8_t fork_demo_image_start[]; /* kernel/sched/fork_demo_blob.asm: embedded build/kernel/user/fork_demo.elf */
+extern const uint8_t fork_demo_image_start[]; /* kernel/user/embed/fork_demo_blob.asm: embedded build/kernel/user/fork_demo.elf */
 extern const uint8_t fork_demo_image_end[];
-extern const uint8_t exec_demo_image_start[]; /* kernel/sched/exec_demo_blob.asm: embedded build/kernel/user/exec_demo.elf */
+extern const uint8_t exec_demo_image_start[]; /* kernel/user/embed/exec_demo_blob.asm: embedded build/kernel/user/exec_demo.elf */
 extern const uint8_t exec_demo_image_end[];
 
 /* Milestone 6 self-test: two kernel threads that never voluntarily
