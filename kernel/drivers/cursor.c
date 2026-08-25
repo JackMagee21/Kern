@@ -4,6 +4,7 @@
 #include "framebuffer.h"
 #include "mouse.h"
 #include "input_router.h"
+#include "../user/input_protocol.h"
 
 #define CURSOR_SIZE 8u
 
@@ -117,7 +118,15 @@ void cursor_poll(void)
     int32_t new_x = (int32_t)cursor_x;
     int32_t new_y = (int32_t)cursor_y;
     int moved = 0;
-    int click_detected = 0; /* Milestone 29: at most one routed click per poll, even if several packets batched together this round -- see cursor.h's own doc comment */
+    /* Milestone 29/31: at most one of each routed per poll, even if
+       several packets batched together this round -- see cursor.h's
+       own doc comment. Scanned PER EVENT (not just "state before" vs
+       "state after" the whole batch) so a press-then-release that both
+       happen to land in the same poll still catches both edges,
+       instead of looking like nothing changed. */
+    int click_detected = 0;
+    int drag_detected = 0;
+    int release_detected = 0;
 
     while (mouse_has_cursor_event()) {
         mouse_event_t event = mouse_get_cursor_event();
@@ -131,6 +140,14 @@ void cursor_poll(void)
 
         if (event.left && !left_was_down) {
             click_detected = 1;
+        } else if (event.left && left_was_down && (event.dx != 0 || event.dy != 0)) {
+            /* Milestone 31 (ADR 0031): held down AND actually moved --
+               not the same report as the initial press (that's
+               click_detected above), and not a stationary hold (no
+               drag to report if the cursor didn't go anywhere). */
+            drag_detected = 1;
+        } else if (!event.left && left_was_down) {
+            release_detected = 1;
         }
         left_was_down = event.left;
     }
@@ -156,12 +173,21 @@ void cursor_poll(void)
     cursor_y = (uint32_t)new_y;
     draw_at_current();
 
-    /* Milestone 29 (ADR 0029): reported AFTER cursor_x/cursor_y are
-       finalized (clamped, assigned, and actually redrawn) -- the exact
-       position a click is routed at always matches what's visually
-       true on screen at that moment, not a possibly-unclamped
-       mid-batch value. */
+    /* Milestone 29/31 (ADR 0029/0031): reported AFTER cursor_x/cursor_y
+       are finalized (clamped, assigned, and actually redrawn) -- the
+       exact position routed always matches what's visually true on
+       screen at that moment, not a possibly-unclamped mid-batch value.
+       All three checked independently (not else-if): a press-then-move
+       or press-then-release within the same poll batch is rare but
+       real, and each condition here was already scanned for
+       separately above. */
     if (click_detected) {
-        input_router_notify_click(cursor_x, cursor_y);
+        input_router_notify(INPUT_EVENT_CLICK, cursor_x, cursor_y);
+    }
+    if (drag_detected) {
+        input_router_notify(INPUT_EVENT_DRAG, cursor_x, cursor_y);
+    }
+    if (release_detected) {
+        input_router_notify(INPUT_EVENT_RELEASE, cursor_x, cursor_y);
     }
 }

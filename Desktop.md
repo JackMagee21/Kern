@@ -175,9 +175,18 @@ each one is needed now, not a deliverables list.
      `console_putc()`'s shared cursor state had NO mutual exclusion
      against preemption, exposed (not caused) by enough ring-3
      processes now existing to make the race likely.
-6. **Window chrome and basic widgets.** Draggable/closable title bars,
-   at least one interactive control. This is where it starts feeling
-   like a desktop rather than a windowing demo.
+6. **Window chrome and basic widgets -- DONE (Milestone 31, ADR
+   0031).** `display_server.c` gained a real, server-drawn title bar
+   (composited above each client's own canvas -- clients needed ZERO
+   changes, chrome is entirely server-owned) and a close button. Two
+   new input events (`INPUT_EVENT_DRAG`/`INPUT_EVENT_RELEASE`) let a
+   real mouse drag actually move a window, tracked server-side.
+   Proven with genuine QEMU-injected input: a real drag moves a window
+   to its exact expected new position, and a real click on the close
+   button removes it cleanly, both confirmed via screendump. This is
+   where it starts feeling like a desktop rather than a windowing demo
+   -- per the user's own explicit request, booting through the `[OK]`
+   self-checks now leads into a real, interactive GUI.
 7. **Real applications.** A small number of genuinely different
    programs (not just tech-demo processes) — candidates: a clock, a
    simple text/log viewer, something interactive enough to prove input

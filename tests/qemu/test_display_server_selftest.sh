@@ -150,7 +150,7 @@ check "[OK] display server self-test passed, sys_fb_present blitted 0x"
 check "kernel shell -- type 'help' for commands"
 check "[OK] display server: subscribed to hardware input events"
 check "[OK] display server: a second sys_input_subscribe correctly failed (already subscribed)"
-check "[OK] input router: routed a click to pid 0x"
+check "[OK] input router: routed click to pid 0x"
 check "[OK] display server: raised window 0x0"
 
 # A [FAIL] line from either process would mean the ownership check or
@@ -296,7 +296,18 @@ if teal_box is None:
 teal_x0, teal_y0, teal_x1, teal_y1, teal_count = teal_box
 
 expected_teal_x = (100, 299)
-expected_teal_count = 200 * 150 - 150 * 100  # client A's full rect minus the overlap client B now owns
+# Milestone 31 (ADR 0031): client A's visible canvas is now reduced by
+# TWO things stacked on top of it, not just client B's own canvas --
+# window B's server-drawn title bar (CHROME_H=20px tall, spanning the
+# same 200px width as its canvas, positioned directly above it) is ALSO
+# opaque and ALSO composited after A, and it reaches further up-and-
+# left into A's exposed canvas than B's canvas alone would. The real
+# overlap is between A's canvas (100-299, 500-649) and B's FULL
+# footprint -- title bar PLUS canvas (150-349, 530-699, since B's own
+# title bar sits at y=550-20=530) -- not just B's canvas (150-349,
+# 550-699): x overlap 150-299 (150px), y overlap 530-649 (120px) =
+# 18000px covered, leaving 200*150 - 18000 = 12000 visible.
+expected_teal_count = 200 * 150 - 150 * 120
 if (teal_x0, teal_x1) != expected_teal_x or (teal_y1 - teal_y0 + 1) != 150 or teal_count != expected_teal_count:
     print(f"FAIL: client A's (teal) visible remainder is wrong: got {teal_box} (height {teal_y1 - teal_y0 + 1}), expected x {expected_teal_x}, height 150, {expected_teal_count} pixels", file=sys.stderr)
     fail = True
@@ -357,8 +368,17 @@ else:
     if (at_x0, at_x1) != (teal_x0, teal_x1) or (at_y1 - at_y0 + 1) != 150 or at_count != 200 * 150:
         print(f"FAIL: after raising client A, its (teal) canvas is not the full unbroken rectangle: got {after_teal_box}", file=sys.stderr)
         fail = True
-    if (ao_x0, ao_x1) != (orange_x0, orange_x1) or (ao_y1 - ao_y0 + 1) != 150 or ao_count != expected_teal_count:
-        print(f"FAIL: after raising client A, client B's (orange) canvas is not reduced to the expected L-shape: got {after_orange_box}, expected {expected_teal_count} pixels", file=sys.stderr)
+    # Milestone 31: NOT the same number as expected_teal_count above --
+    # that one accounts for B's title bar ALSO covering part of A's
+    # canvas (A was on the bottom then); here A is on TOP, and only
+    # A's own CANVAS (not its title bar, which sits above y=649 -- B's
+    # canvas starts at y=550, well below A's title bar's own y-range of
+    # 480-499) actually overlaps B's canvas: x overlap 150-299 (150px),
+    # y overlap 550-649 (100px) = 15000px covered, leaving
+    # 200*150 - 15000 = 15000 visible.
+    expected_orange_l_shape_count = 200 * 150 - 150 * 100
+    if (ao_x0, ao_x1) != (orange_x0, orange_x1) or (ao_y1 - ao_y0 + 1) != 150 or ao_count != expected_orange_l_shape_count:
+        print(f"FAIL: after raising client A, client B's (orange) canvas is not reduced to the expected L-shape: got {after_orange_box}, expected {expected_orange_l_shape_count} pixels", file=sys.stderr)
         fail = True
 
     # The direct proof: the overlap point that was ORANGE in the first

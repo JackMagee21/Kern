@@ -17,11 +17,14 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 30 (2026-08-25)
+## State as of Milestone 31 (2026-08-25)
 
 **GUI arc in progress** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
-with the user). Milestones 24-30 (below) are the first seven steps.
+with the user). Milestones 24-31 (below) are the first eight steps.
+As of Milestone 31, per the user's own explicit request, booting
+through the `[OK]` self-checks now leads into a real, interactive GUI:
+two windows with title bars, draggable and closable with the mouse.
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -313,8 +316,27 @@ the design reasoning and any real bugs found along the way.
     with a SECOND QEMU screendump showing the overlap region genuinely
     flip ownership after a real injected click. Reap-count target
     LOWERED for the first time ever, 10 → 9. See ADR 0030.
+31. **Window chrome and basic widgets** — the milestone Desktop.md
+    itself calls "where it starts feeling like a desktop rather than a
+    windowing demo," and where the user's own explicit request (boot
+    through the `[OK]` checks, then a real usable GUI) landed.
+    `display_server.c` gained a server-drawn title bar (composited
+    ABOVE each client's own canvas — the client needed ZERO changes,
+    chrome is entirely server-owned so a client can't fake/omit its own
+    decorations) with a real close button. Two new input events
+    (`INPUT_EVENT_DRAG`, sent only while the button is held AND moving;
+    `INPUT_EVENT_RELEASE`, the press edge's mirror) let a real mouse
+    drag actually move a window, tracked entirely server-side. Proven
+    with genuine QEMU-injected input, not a self-report:
+    `test_window_chrome_selftest.sh` drags one window 450px and
+    confirms its EXACT new position via screendump, then closes the
+    other and confirms it vanished completely while the dragged one
+    stayed intact. One existing test's pixel math needed a real,
+    hand-derived correction (not a loosened tolerance) for a genuine
+    consequence of chrome: one window's title bar now also covers part
+    of a neighbor's exposed canvas. See ADR 0031.
 
-**Testing state:** 26 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+**Testing state:** 27 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Almost every milestone has its own dedicated smoke
 test (Milestone 24 is the one exception — see item 24 above for why
@@ -322,11 +344,11 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** twenty-four
-milestones (9-30) all followed the same pattern — implement, boot in
+**A note on process discipline that held up well:** twenty-five
+milestones (9-31) all followed the same pattern — implement, boot in
 QEMU for real, fix what actually breaks, write the ADR describing what
 was tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15, 17-19, 21-22, 24, 27, and 29 all
+logical pieces. Milestones 10-15, 17-19, 21-22, 24, 27, 29, and 31 all
 landed correctly on the first real boot (Milestone 29's own real find
 — a process blocking forever for external input would hang every OTHER
 test's reap-count gate — was caught in review, before ever booting, not
@@ -417,12 +439,14 @@ signal CLAUDE.md asks for before this territory gets touched.
 ## Reasonable next steps (not flagged, not started)
 
 The main line of "what's next" is now `Desktop.md`'s GUI arc (Milestones
-24-30 done; Milestone 31 = window chrome and basic widgets — draggable/
-closable title bars, at least one interactive control — then real
-apps). ADR 0028's own flagged windows-drift-from-console-scroll gap was
-actually FIXED in Milestone 30, not just documented further: windows
-now live permanently below a reserved, bounded console scroll region,
-immune to it the same way the cursor already was. A real path-based
+24-31 done; Milestone 32 = real applications — a small number of
+genuinely different programs, not tech-demo processes, to actually use
+inside the now-draggable/closable windows). Note: closing a window
+currently doesn't reclaim its client process/shm reference (ADR 0031's
+own Known limitations) — fine for the current one-shot demo clients
+(already exited by the time a close is even possible), but a REAL
+close protocol (telling a still-running client to exit) will be needed
+once Milestone 32's own long-running apps exist. A real path-based
 `execve` remains blocked on the filesystem non-goal, which `Desktop.md`'s
 scope confirmation keeps deferred for this whole arc.
 

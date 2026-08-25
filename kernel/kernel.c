@@ -795,24 +795,26 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(syscall_get_ipc_recv_block_count());
     console_write(" turns) before the sender's message arrived\n");
 
-    /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028): proves
-       sys_fb_present genuinely blitted into the real framebuffer, not
-       just that the display server/clients' own success markers
-       printed above -- the same "prove the new syscall path was
-       actually exercised, not just correct by luck" pattern
-       syscall_get_exec_count()/syscall_get_ipc_recv_block_count()
-       already established. Milestone 28 checks for EXACTLY 2, not just
-       ">0": one call per window (client A, then client B) -- a count
-       of 1 here would mean the second window's own present silently
-       never happened even though its own success marker might still
-       have printed for some other reason. The ACTUAL pixel-level proof
-       that both windows landed at the right place, at the right
+    /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028) / Milestone 31
+       (ADR 0031): proves sys_fb_present genuinely blitted into the
+       real framebuffer, not just that the display server/clients' own
+       success markers printed above -- the same "prove the new
+       syscall path was actually exercised, not just correct by luck"
+       pattern syscall_get_exec_count()/syscall_get_ipc_recv_block_count()
+       already established. Checks for EXACTLY 4, not just ">0": TWO
+       calls per window now (Milestone 31 added a server-drawn title
+       bar, presented separately from the client's own canvas,
+       kernel/user/display_server.c's own present_window()) -- a count
+       lower than 4 would mean some window's chrome or canvas silently
+       never landed even though its own success marker might still have
+       printed for some other reason. The ACTUAL pixel-level proof that
+       both windows landed at the right place, at the right
        (bound-enforced) size, in the right z-order, and nowhere else,
        is tests/qemu/test_display_server_selftest.sh's own real QEMU
        screendump check -- this counter only proves the syscalls ran,
        not where they drew. */
-    if (syscall_get_fb_present_count() != 2) {
-        panic("display server self-test failed: sys_fb_present did not blit exactly 2 frames (one window landed silently, or too many)");
+    if (syscall_get_fb_present_count() != 4) {
+        panic("display server self-test failed: sys_fb_present did not blit exactly 4 frames (some window's chrome or canvas landed silently, or too many)");
     }
     console_write("[OK] display server self-test passed, sys_fb_present blitted 0x");
     console_write_hex(syscall_get_fb_present_count());

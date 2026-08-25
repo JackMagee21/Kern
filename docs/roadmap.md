@@ -1619,15 +1619,70 @@ close/chrome/widgets yet (`Desktop.md`'s own next arc item). No drag,
 no close, no keyboard focus routing. The console's reserved height
 (480px) is a fixed constant, not derived from actual boot text volume.
 
-## 31. Window chrome and basic widgets (sequence TBD)
+## 31. Window chrome and basic widgets (title bars, drag-to-move, close button)
 
-Milestone 31 is intentionally left as a one-line placeholder here — full
+The milestone Desktop.md itself describes as "where it starts feeling
+like a desktop rather than a windowing demo" — and the point where, per
+the user's own explicit request, booting through the `[OK]` self-checks
+now leads into a real, interactive GUI rather than just a static
+tech demo sitting on screen.
+
+**Deliverables:**
+- `kernel/user/display_server.c` gained a server-drawn title bar (a
+  static buffer composited ABOVE each client's own canvas — the client
+  needed zero changes; chrome is entirely server-owned, so a client
+  can't fake or omit its own decorations) with a real close button.
+- Two new input events (`kernel/user/input_protocol.h`):
+  `INPUT_EVENT_DRAG` (sent by `cursor.c` only while the button is held
+  AND the cursor is moving — never on a plain hover) and
+  `INPUT_EVENT_RELEASE` (the button-up mirror of `INPUT_EVENT_CLICK`'s
+  press edge). `kernel/drivers/input_router.c`'s `notify_click()`
+  generalized into `notify(event, x, y)`, reused for all three.
+- A real click on a window's title bar (elsewhere than the close
+  button) now begins a drag, tracked entirely server-side (the fixed
+  offset from the window's own (x,y) to the clicked point); further
+  drag events reposition it, clamped to stay fully on screen and below
+  the console's own reserved region (Milestone 30's fix). A click on
+  the close button marks that window closed, clears its old footprint,
+  and recomposites whatever's left.
+**Verification:** `make run` boots and prints every Milestone 1-30
+marker unchanged; `sys_fb_present`'s own self-test count updated 2 → 4
+(a title-bar present plus a canvas present per window during setup).
+**The real proof is genuine interaction:** `tests/qemu/test_window_chrome_selftest.sh`
+(new) injects a real press on one window's title bar, a real 450px
+drag, and a real release, then confirms via screendump the window
+landed at the EXACT expected new position — then injects a real click
+on the OTHER window's close button and confirms, via a second
+screendump, that window vanished completely while the dragged one
+stayed intact. `tests/qemu/test_display_server_selftest.sh`'s own
+pixel math was updated (not loosened) for a REAL, correctly-derived
+consequence of chrome: one window's title bar now also covers part of
+the other's exposed canvas, beyond what its own canvas alone already
+did — hand-derived before changing the assertion, then confirmed exact.
+`-d int,cpu_reset` trace unchanged. All twenty-six other smoke tests
+and all four host suites pass.
+**Design record:** `docs/adr/0031-window-chrome-and-widgets.md`.
+**Known limitations (accepted for this milestone only):** still exactly
+two fixed-size, fixed-identity windows — no new windows, no resize, no
+keyboard focus routing. Closing a window doesn't reclaim its client
+process or shared-memory reference (the client has already exited by
+the time a close is even possible, so this is a bounded, one-time gap,
+not a growing leak) — a real close PROTOCOL (telling a still-running
+client to exit) is future work once windows host real, long-running
+applications.
+
+## 32. Real applications (sequence TBD)
+
+Milestone 32 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
-in sequence per `Desktop.md`'s GUI arc: draggable/closable title bars
-and at least one interactive widget, then real applications. See
-`Desktop.md` for the full sequencing and `future.md` for the rest of
-this project's continuation briefing. Separately, still awaiting the
-user's decision: a disk driver + real filesystem, ACPI-based shutdown,
-and SMP/networking, all explicitly flagged non-goals.
+in sequence per `Desktop.md`'s GUI arc: a small number of genuinely
+different programs (not just tech-demo processes) — candidates: a
+clock, a simple text/log viewer, something interactive enough to prove
+the whole stack (compositing, input routing, chrome) works end to end
+for something a person would actually want to use. See `Desktop.md` for
+the full sequencing and `future.md` for the rest of this project's
+continuation briefing. Separately, still awaiting the user's decision:
+a disk driver + real filesystem, ACPI-based shutdown, and SMP/
+networking, all explicitly flagged non-goals.

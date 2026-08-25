@@ -26,4 +26,19 @@
    where it reads pressed). fields[3] unused. */
 #define INPUT_EVENT_CLICK 1
 
+/* Milestone 31 (ADR 0031): fields[1] = x, fields[2] = y -- the cursor's
+   CURRENT position, sent once per kernel/drivers/cursor.c poll where
+   the cursor moved WHILE the left button was already held down (i.e.
+   NOT the same report as the initial press -- that's still
+   INPUT_EVENT_CLICK). Lets a subscriber implement drag-to-move without
+   a general "stream every mouse move" event kernel_main's own
+   kernel/drivers/mouse.c debug queue already proves nothing else needs
+   (only sent while a button is down, never on a plain hover). */
+#define INPUT_EVENT_DRAG 2
+
+/* Milestone 31 (ADR 0031): fields[1] = x, fields[2] = y -- sent once,
+   on the report where the left button transitions from held to
+   released (the mirror image of INPUT_EVENT_CLICK's press edge). */
+#define INPUT_EVENT_RELEASE 3
+
 #endif /* KERNEL_USER_INPUT_PROTOCOL_H */
