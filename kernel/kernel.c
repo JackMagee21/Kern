@@ -2,7 +2,9 @@
 #include <stdint.h>
 
 #include "drivers/serial.h"
-#include "drivers/vga.h"
+#include "drivers/framebuffer.h"
+#include "drivers/fbconsole.h"
+#include "drivers/cursor.h"
 #include "drivers/console.h"
 #include "drivers/pic.h"
 #include "drivers/pit.h"
@@ -92,7 +94,15 @@ static void pci_report_device(const pci_device_t *dev, void *ctx)
 void kernel_main(uint32_t magic, uint32_t mbi_addr)
 {
     serial_init();
-    vga_init();
+
+    /* Milestone 23 (ADR 0023): the graphics framebuffer console can only
+       be set up once vmm_phys_to_virt() is usable (Milestone 19's
+       direct-map, itself only available after pmm_init() runs, well
+       below) -- unlike Milestone 8's old vga_init(), which ran here at
+       time zero. Every console_write() call between here and that point
+       still reaches serial (console.c's fan-out), just not the screen
+       yet -- a deliberate, documented tradeoff, not a lost message; see
+       ADR 0023's Known limitations. */
 
     if (magic != MULTIBOOT2_BOOTLOADER_MAGIC) {
         panic("invalid multiboot2 magic");
@@ -172,6 +182,22 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     }
     pmm_free_frame(direct_map_test_frame);
     console_write("[OK] direct-map self-test passed (write via vmm_phys_to_virt visible via the low identity mapping)\n");
+
+    /* Milestone 23 (ADR 0023): the graphics framebuffer console. Must
+       run here, not earlier -- fb_init() needs vmm_phys_to_virt() (just
+       proven above) to reach the framebuffer's physical memory (QEMU
+       places it at 0xfd000000, well outside the low identity window).
+       Every message from here on reaches BOTH serial and the screen;
+       everything before this point only reached serial (see this
+       function's opening comment). cursor_init() must run after
+       fbconsole_init() (starts centered on the now-known screen
+       dimensions) but doesn't depend on mouse_init() having run yet --
+       it just draws the cursor's initial static position; mouse_init()
+       (below) is what makes it actually move. */
+    fb_init(mbi_addr);
+    fbconsole_init();
+    console_write("[OK] graphics framebuffer console initialized\n");
+    cursor_init();
 
     heap_init();
     console_write("[OK] kernel heap initialized\n");

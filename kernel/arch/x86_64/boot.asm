@@ -38,6 +38,32 @@ mb2_header_start:
     dd mb2_header_end - mb2_header_start
     dd -(MB2_MAGIC + MB2_ARCH_I386 + (mb2_header_end - mb2_header_start)) & 0xFFFFFFFF
 
+    ; Milestone 23 (ADR 0023): framebuffer request tag, type=5, struct
+    ; verified against the canonical GRUB header (rhboot/grub2's
+    ; multiboot2.h, struct multiboot_header_tag_framebuffer -- same
+    ; primary source ADR 0001 already used for this file's other
+    ; Multiboot2 structures): { type:u16 flags:u16 size:u32 width:u32
+    ; height:u32 depth:u32 } = 20 bytes. flags=1
+    ; (MULTIBOOT_HEADER_TAG_OPTIONAL) -- if the bootloader genuinely
+    ; can't satisfy this, boot must still proceed rather than fail
+    ; outright; kernel/drivers/framebuffer.c panics with a clear message
+    ; if no framebuffer tag comes back in the boot-info structure, which
+    ; beats an opaque GRUB-side boot failure. Requesting 1024x768x32
+    ; specifically (not 0/0/0 "don't care") for a deterministic,
+    ; reproducible mode across boots -- the boot-info tag's OWN reported
+    ; width/height/bpp are what the kernel actually trusts and uses,
+    ; never this request verbatim, since a bootloader is free to
+    ; substitute its own best match.
+    align 8
+fb_tag_start:
+    dw 5                          ; MULTIBOOT_HEADER_TAG_FRAMEBUFFER
+    dw 1                          ; MULTIBOOT_HEADER_TAG_OPTIONAL
+    dd fb_tag_end - fb_tag_start  ; size = the WHOLE tag, type/flags/size fields included
+    dd 1024                       ; width
+    dd 768                        ; height
+    dd 32                         ; depth (bits per pixel)
+fb_tag_end:
+
     ; End tag: type=0, flags=0, size=8
     align 8
     dw 0

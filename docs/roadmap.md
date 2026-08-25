@@ -1075,20 +1075,116 @@ path; an ELF64 validation failure on the embedded target image still
 panics (build-time-trusted, same stance `task_create_user_image()`
 already takes).
 
-## 23. FS, SMP, and whatever's learned by then (sequence TBD)
+## 23. Graphics framebuffer console and mouse cursor — DONE
+Motivated by Milestone 16's own named limitation (ADR 0016 — the mouse
+driver had nothing to draw a cursor on) and `future.md`'s "reasonable
+next steps." A real design fork was found before writing any code and
+checked with the user rather than guessed past: satisfying a Multiboot2
+framebuffer request switches the video HARDWARE mode, so VGA text mode
+(Milestone 8) and a linear graphics framebuffer can't run
+simultaneously — drawing a cursor on pixels would otherwise silently
+regress the existing on-screen shell. The user chose full replacement:
+real text rendering on the framebuffer (closing ADR 0008's own flagged
+UEFI-without-CSM gap too), not a narrower opt-in demo.
+**Proves:** the kernel negotiates a real linear framebuffer via
+Multiboot2, renders its ENTIRE console (boot log + interactive shell) as
+correctly-formed, legible pixel text, and moves a mouse cursor to the
+EXACT expected pixel position in response to genuine synthetic PS/2
+input — not just that a framebuffer driver exists.
+**Deliverables:**
+- `kernel/arch/x86_64/boot.asm`: Multiboot2 framebuffer request tag
+  (1024x768x32, optional), verified against the canonical GRUB header
+  before writing any code (same primary source as ADR 0001). Confirmed
+  via a temporary probe that GRUB honors it with ZERO `grub.cfg` changes
+  needed — tested incrementally before building anything on top, per
+  CLAUDE.md's boot-protocol discipline.
+- `kernel/arch/x86_64/multiboot2.h/.c`: framebuffer boot-info tag
+  struct; a new shared `multiboot2_find_tag()` helper, factored out once
+  `framebuffer.c` became a second real consumer of `pmm.c`'s existing
+  inline tag-walk (which was refactored to use it too — pure,
+  behavior-preserving).
+- `kernel/drivers/framebuffer.h/.c` (new): `fb_init()` reads the
+  negotiated mode back from the boot-info tag (never hardcodes the
+  request) and reaches its physical memory via the EXISTING Milestone 19
+  direct-map (`vmm_phys_to_virt()`) — QEMU's framebuffer BAR
+  (`0xfd000000`, observed) sits well under 4GiB, so ZERO new page-table
+  work was needed. `fb_put_pixel`/`fb_fill_rect`/`fb_read_rect`/
+  `fb_scroll_up`/`fb_pack_color`, all guarded by an `fb_ready` flag so a
+  panic/fault dump that fires before `fb_init()` has run (unavoidably
+  later in boot than the old `vga_init()` — needs the direct-map first)
+  can never itself crash.
+- `kernel/drivers/font8x8.h` (new): a real, well-known public-domain 8x8
+  bitmap font, fetched and byte-for-byte extracted from a real source
+  (`dhepper/font8x8`) rather than hand-authored from memory — a
+  first-try extraction regex bug (a glyph's own trailing comment
+  containing a literal `{` confused a naive parser) was caught by
+  validating every row's byte count before embedding, not by a garbled
+  on-screen glyph.
+- `kernel/drivers/fbconsole.h/.c` (new): the text console, same
+  `putc`/`clear`/`write` interface `vga.c` had (one-line swap in
+  `console.c`'s fan-out), cell grid sized from the ACTUAL negotiated
+  resolution (128x96 cells), scrolling via `fb_scroll_up()`'s raw
+  pixel-row copy.
+- `kernel/drivers/cursor.h/.c` (new): a save/restore sprite pattern
+  (`fb_read_rect`/`fb_fill_rect`) moved by real mouse deltas; erase (old
+  position) happens strictly before the position updates and the new
+  save+draw, an ordering worked out on paper before writing code.
+- `kernel/drivers/mouse.h/.c`: a SECOND, independent event queue
+  (`mouse_has_cursor_event()`/`mouse_get_cursor_event()`) — found and
+  designed around BEFORE it broke anything: `cursor_poll()` and the
+  shell's existing `mouse` command both need every decoded packet, and
+  a single shared queue would let one silently steal the other's event,
+  which would have broken `test_mouse_selftest.sh`'s already-passing
+  contract.
+- `kernel/shell.c`: `read_line()`'s existing keyboard-wait loop also
+  calls `cursor_poll()` every `hlt` wakeup — no new polling loop or
+  scheduling primitive needed.
+- `kernel/drivers/vga.c`/`vga.h`: retired (deleted) — once graphics mode
+  is active, `0xB8000` is no longer live text-mode memory; keeping it
+  around unused would be actively misleading, not just dead code.
+**Verification:** `make run` boots and prints every Milestone 1-22
+marker unchanged (through serial only, until the direct-map exists),
+then `[OK] graphics framebuffer console initialized`, after which every
+message reaches both serial and the screen. A QEMU `screendump` at the
+shell prompt, visually inspected, shows every boot-log line correctly
+rendered — the font's bit-order convention was right on the first
+attempt, confirmed by looking, not trusted from memory. `-d
+int,cpu_reset` trace: unchanged from Milestone 22 (1 `#BP`, 3 `#PF`,
+zero double-fault/reset) — this milestone added no new fault-driven code
+paths. `tests/qemu/test_framebuffer_selftest.sh` (new) takes two real
+screendumps around a real injected `mouse_move 100 50` and asserts the
+cursor's 8x8 block is at the EXACT expected pixel position both before
+and after, with no leftover pixels at the old position. All twenty-two
+earlier smoke tests (`test_mouse_selftest.sh`/`test_shell_selftest.sh`
+specifically re-verified, both directly touched by this milestone) and
+all four host test suites re-verified passing with no assertion
+changes needed. Correct on the first real boot attempt; booted 5 times
+back to back, identical shape every time.
+**Design record:** `docs/adr/0023-framebuffer-console-and-cursor.md`.
+**Known limitation (accepted for this milestone only):** no blinking
+text-input caret; the mouse cursor is a plain filled square, not a real
+arrow shape; no MTRR/PAT tuning of the framebuffer's memory-type
+attributes; only 32bpp direct-color RGB is supported (panics on
+INDEXED/EGA_TEXT, neither ever observed from QEMU's default machine);
+the visible graphics boot log starts partway through boot (after the
+direct-map is ready), not at `kernel_main`'s very first line — every
+message still reaches serial throughout, so nothing is silently lost.
 
-Milestone 23 is intentionally left as a one-line placeholder here — full
+## 24. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 24 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
 candidates from the post-Milestone-8 "build this into an OS" inventory:
 VMA tracking (a real per-process memory map instead of a few hardcoded
-regions — neither Milestone 21's COW fork nor Milestone 22's `sys_exec`
-needed it, but demand paging beyond fork's own sharing would), and a
-real sleep-queue/wake scheduler primitive generalizing Milestone 20's
-one-off `sys_wait`-specific blocking loop, once a second real caller
-motivates it (real IPC — pipes, shared memory, signals — would need
-exactly this) — plus a disk driver + real filesystem, ACPI-based
-shutdown, and SMP/networking, all explicitly flagged to the user rather
-than started, still awaiting a decision. See `future.md` for a fuller
-continuation briefing.
+regions — none of Milestones 21-23 needed it, but demand paging beyond
+fork's own sharing would), and a real sleep-queue/wake scheduler
+primitive generalizing Milestone 20's one-off `sys_wait`-specific
+blocking loop, once a second real caller motivates it (real IPC — pipes,
+shared memory, signals — would need exactly this) — a real pointer/arrow
+cursor shape and text-input caret (cosmetic polish on Milestone 23) —
+plus a disk driver + real filesystem, ACPI-based shutdown, and
+SMP/networking, all explicitly flagged to the user rather than started,
+still awaiting a decision. See `future.md` for a fuller continuation
+briefing.

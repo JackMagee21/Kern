@@ -91,18 +91,36 @@ static mouse_event_t event_queue[EVENT_QUEUE_CAPACITY];
 static volatile uint32_t queue_head; /* next write index (producer: the IRQ handler) */
 static volatile uint32_t queue_tail; /* next read index (consumer: whoever calls mouse_get_event) */
 
-/* Single-producer/single-consumer, same reasoning as libk/ring_buffer.c
-   -- not reused directly since that module is char-specific and a
-   second, struct-typed instantiation isn't worth generalizing it for
-   yet (CLAUDE.md: don't add abstractions beyond what's needed). */
+/* Milestone 23 (ADR 0023): a second, independent single-producer/
+   single-consumer queue, fed the SAME decoded packets as event_queue
+   above -- see mouse_has_cursor_event()'s doc comment (mouse.h) for why
+   a single shared queue isn't safe once two independent consumers
+   (cursor_poll() and the shell's `mouse` command) both drain the same
+   hardware stream. */
+static mouse_event_t cursor_event_queue[EVENT_QUEUE_CAPACITY];
+static volatile uint32_t cursor_queue_head;
+static volatile uint32_t cursor_queue_tail;
+
+/* Single-producer/single-consumer PER queue, same reasoning as
+   libk/ring_buffer.c -- not reused directly since that module is
+   char-specific and a second, struct-typed instantiation isn't worth
+   generalizing it for yet (CLAUDE.md: don't add abstractions beyond
+   what's needed). Broadcasts into BOTH queues -- each has its own
+   independent head/tail, so one consumer draining its queue can never
+   affect what the other observes. */
 static void queue_push(mouse_event_t event)
 {
     uint32_t next_head = (queue_head + 1u) % EVENT_QUEUE_CAPACITY;
-    if (next_head == queue_tail) {
-        return; /* full -- drop, matching keyboard.c's ring buffer's contract */
+    if (next_head != queue_tail) {
+        event_queue[queue_head] = event;
+        queue_head = next_head;
+    } /* else full -- drop, matching keyboard.c's ring buffer's contract */
+
+    uint32_t next_cursor_head = (cursor_queue_head + 1u) % EVENT_QUEUE_CAPACITY;
+    if (next_cursor_head != cursor_queue_tail) {
+        cursor_event_queue[cursor_queue_head] = event;
+        cursor_queue_head = next_cursor_head;
     }
-    event_queue[queue_head] = event;
-    queue_head = next_head;
 }
 
 static uint8_t packet[3];
@@ -225,5 +243,21 @@ mouse_event_t mouse_get_event(void)
     }
     event = event_queue[queue_tail];
     queue_tail = (queue_tail + 1u) % EVENT_QUEUE_CAPACITY;
+    return event;
+}
+
+bool mouse_has_cursor_event(void)
+{
+    return cursor_queue_head != cursor_queue_tail;
+}
+
+mouse_event_t mouse_get_cursor_event(void)
+{
+    mouse_event_t event = {0};
+    if (cursor_queue_head == cursor_queue_tail) {
+        return event;
+    }
+    event = cursor_event_queue[cursor_queue_tail];
+    cursor_queue_tail = (cursor_queue_tail + 1u) % EVENT_QUEUE_CAPACITY;
     return event;
 }

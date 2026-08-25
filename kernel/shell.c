@@ -7,6 +7,7 @@
 #include "drivers/pit.h"
 #include "drivers/rtc.h"
 #include "drivers/mouse.h"
+#include "drivers/cursor.h"
 #include "arch/x86_64/reboot.h"
 #include "../libk/fmt.h"
 
@@ -58,6 +59,13 @@ static void read_line(char *buf, int max_len)
     int len = 0;
     for (;;) {
         while (!keyboard_has_char()) {
+            /* Milestone 23 (ADR 0023): every hlt wakeup here (keyboard,
+               mouse, or the 100Hz timer) also gives the mouse cursor a
+               chance to redraw at its latest position -- no dedicated
+               polling loop or new scheduling primitive needed, since
+               this loop already wakes on exactly the interrupts that
+               matter. */
+            cursor_poll();
             __asm__ volatile("hlt");
         }
         char c = keyboard_getc();

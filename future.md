@@ -17,7 +17,7 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 22 (2026-08-25)
+## State as of Milestone 23 (2026-08-25)
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -147,17 +147,38 @@ the design reasoning and any real bugs found along the way.
     self-tests count their own messages an exact number of times. See
     ADR 0022.
 
-**Testing state:** 22 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+23. **Graphics framebuffer console and mouse cursor** — Milestone 16's
+    mouse driver finally has something to draw a cursor on. A real
+    design fork (VGA text mode and a linear framebuffer can't run
+    simultaneously) was checked with the user before writing code; the
+    chosen scope replaced the whole VGA console (`kernel/drivers/vga.c`,
+    retired) with a real framebuffer-rendered one
+    (`kernel/drivers/fbconsole.c`, an embedded public-domain 8x8 font)
+    rather than a narrower graphics-mode-only demo. `kernel/drivers/
+    framebuffer.c` negotiates the mode via a new Multiboot2 request tag
+    (`kernel/arch/x86_64/boot.asm`) and reaches its physical memory via
+    the EXISTING Milestone 19 direct-map — zero new page-table work,
+    since QEMU's framebuffer BAR sits well under 4GiB. `kernel/drivers/
+    cursor.c` moves a sprite via real mouse deltas from a SECOND,
+    independent event queue in `mouse.c` (found and designed around
+    before it could break `test_mouse_selftest.sh`'s existing contract,
+    not discovered by a live failure). Verified via a real QEMU
+    screendump, visually inspected (font rendering was correct on the
+    first attempt) AND turned into an automated pixel-position
+    assertion (`test_framebuffer_selftest.sh`) around a real injected
+    `mouse_move`. See ADR 0023.
+
+**Testing state:** 23 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Every milestone has its own dedicated smoke test; run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** sixteen milestones
-(9-22) all followed the same pattern — implement, boot in QEMU for
+**A note on process discipline that held up well:** seventeen milestones
+(9-23) all followed the same pattern — implement, boot in QEMU for
 real, fix what actually breaks, write the ADR describing what was
 tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15, 17-19, and 21-22 all landed correctly
+logical pieces. Milestones 10-15, 17-19, and 21-23 all landed correctly
 on the first real boot; Milestone 9 (per-process address spaces) and
 Milestone 16 (PS/2 mouse) each hit one genuine bug that needed real
 diagnosis (not guessing) to fix — both are documented in detail in
@@ -184,7 +205,17 @@ design turned out to be simpler than what an earlier session (this
 same `future.md`, before Milestone 22 started) had predicted was
 necessary — re-reading the actual assembly before trusting that
 prediction is what found the simpler path, rather than building the
-more complex "obviously needed" primitive on faith.
+more complex "obviously needed" primitive on faith. Milestone 23 hit a
+real design fork worth naming too: the two-consumers-one-queue mouse
+bug (cursor_poll() vs. the shell's `mouse` command) was found by
+reading `shell.c`'s existing code before writing `cursor.c`, never
+observed as a live test failure -- the same prospective-diagnosis
+pattern Milestone 20 established. Separately, its embedded bitmap
+font's own extraction script had a real, single-glyph parsing bug
+(a source comment's stray `{` character) caught by validating every
+row's byte count before ever embedding it, not by a garbled on-screen
+character -- CLAUDE.md's "verify against a real source, don't guess"
+discipline applied to a cosmetic-only concern for the first time.
 
 ## Explicitly flagged, NOT started — needs your decision
 
@@ -235,10 +266,16 @@ time:
   signals) would need an actual blocked-task/wake-list mechanism once
   there's a second real reason for two processes to synchronize, not
   just "wait for one to exit."
-- **Cursor/graphics.** Milestone 16 built the mouse *input* path with
-  nothing to draw a cursor on. A framebuffer console (flagged as future
-  work back in ADR 0008, for UEFI-without-CSM compatibility too) would
-  unlock this.
+- **Cosmetic polish on Milestone 23's graphics console.** The mouse
+  cursor is a plain filled square (ADR 0023's Known limitations), not a
+  real arrow/pointer shape; the framebuffer console has no blinking
+  text-input caret the way VGA text mode did. Neither is a correctness
+  gap -- both were deliberately deferred as cosmetic-only.
+- **Update `docs/roadmap.md`'s Milestone 8 text** to note VGA text mode
+  was retired in favor of Milestone 23's framebuffer console, if a
+  future reader finds the "known limitation: doesn't work on UEFI
+  without CSM" line there confusing now that it's moot (superseded, not
+  fixed) -- a documentation nit, not a code change.
 
 ## How to pick this back up
 

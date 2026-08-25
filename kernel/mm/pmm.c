@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include "pmm.h"
@@ -98,35 +99,24 @@ void pmm_init(uint32_t mbi_addr)
     const multiboot2_info_header_t *info = (const multiboot2_info_header_t *)(uintptr_t)mbi_addr;
     uint32_t total_size = info->total_size;
 
-    const uint8_t *tag_ptr = (const uint8_t *)(uintptr_t)mbi_addr + sizeof(multiboot2_info_header_t);
-    const uint8_t *info_end = (const uint8_t *)(uintptr_t)mbi_addr + total_size;
-
-    while (tag_ptr + sizeof(multiboot2_tag_t) <= info_end) {
-        const multiboot2_tag_t *tag = (const multiboot2_tag_t *)tag_ptr;
-        if (tag->type == MULTIBOOT2_TAG_TYPE_END) {
-            break;
-        }
-
-        if (tag->type == MULTIBOOT2_TAG_TYPE_MMAP && tag->size >= sizeof(multiboot2_tag_mmap_t)) {
-            const multiboot2_tag_mmap_t *mmap = (const multiboot2_tag_mmap_t *)tag_ptr;
-            if (mmap->entry_size != 0) {
-                uint32_t entry_count = (mmap->size - sizeof(multiboot2_tag_mmap_t)) / mmap->entry_size;
-                const uint8_t *entry_ptr = tag_ptr + sizeof(multiboot2_tag_mmap_t);
-                for (uint32_t i = 0; i < entry_count; i++) {
-                    const multiboot2_mmap_entry_t *entry = (const multiboot2_mmap_entry_t *)entry_ptr;
-                    if (entry->type == MULTIBOOT2_MEMORY_AVAILABLE) {
-                        mark_free_range(entry->base_addr, entry->base_addr + entry->length);
-                    }
-                    entry_ptr += mmap->entry_size;
+    /* Milestone 23 (ADR 0023): tag lookup itself is now shared with
+       framebuffer.c via multiboot2_find_tag() -- this is a pure refactor
+       of what used to be an inline walk here; behavior is unchanged
+       (same MMAP-tag-size floor, same entry-iteration logic). */
+    const multiboot2_tag_t *mmap_tag = multiboot2_find_tag(mbi_addr, MULTIBOOT2_TAG_TYPE_MMAP);
+    if (mmap_tag != NULL && mmap_tag->size >= sizeof(multiboot2_tag_mmap_t)) {
+        const multiboot2_tag_mmap_t *mmap = (const multiboot2_tag_mmap_t *)mmap_tag;
+        if (mmap->entry_size != 0) {
+            uint32_t entry_count = (mmap->size - sizeof(multiboot2_tag_mmap_t)) / mmap->entry_size;
+            const uint8_t *entry_ptr = (const uint8_t *)mmap_tag + sizeof(multiboot2_tag_mmap_t);
+            for (uint32_t i = 0; i < entry_count; i++) {
+                const multiboot2_mmap_entry_t *entry = (const multiboot2_mmap_entry_t *)entry_ptr;
+                if (entry->type == MULTIBOOT2_MEMORY_AVAILABLE) {
+                    mark_free_range(entry->base_addr, entry->base_addr + entry->length);
                 }
+                entry_ptr += mmap->entry_size;
             }
         }
-
-        uint32_t advance = (tag->size + 7) & ~7u; /* tags are 8-byte aligned */
-        if (advance == 0) {
-            break; /* malformed zero-size tag: stop instead of looping forever */
-        }
-        tag_ptr += advance;
     }
 
     /* Reserve what must never be handed out: physical address 0 (so an

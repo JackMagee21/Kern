@@ -33,4 +33,20 @@ bool mouse_has_event(void);
    simplest correct behavior" contract as keyboard.c's ring buffer. */
 mouse_event_t mouse_get_event(void);
 
+/* Milestone 23 (ADR 0023): a SECOND, independent queue -- every decoded
+   packet is broadcast into both this one and the debug queue above
+   (mouse_has_event()/mouse_get_event(), used by the shell's own `mouse`
+   command). Needed specifically because kernel/drivers/cursor.c's
+   cursor_poll() and the shell's `mouse` command now consume the SAME
+   underlying hardware stream from two genuinely different call sites
+   (cursor_poll() runs continuously from shell.c's read_line() wait
+   loop; the `mouse` command drains events on demand) -- a single shared
+   queue would let whichever one polls first silently steal the other's
+   event, which is exactly what broke the `mouse` command's own
+   already-tested contract (test_mouse_selftest.sh) during this
+   milestone's design before being caught. Same fixed-capacity/drop-if-
+   full contract as the debug queue. */
+bool mouse_has_cursor_event(void);
+mouse_event_t mouse_get_cursor_event(void);
+
 #endif /* KERNEL_DRIVERS_MOUSE_H */

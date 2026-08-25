@@ -20,11 +20,12 @@ ASFLAGS := -f elf64
 BUILD_DIR := build
 ISO_DIR := $(BUILD_DIR)/iso
 
-C_SOURCES := kernel/kernel.c kernel/panic.c kernel/shell.c kernel/drivers/serial.c kernel/drivers/vga.c kernel/drivers/console.c \
+C_SOURCES := kernel/kernel.c kernel/panic.c kernel/shell.c kernel/drivers/serial.c kernel/drivers/framebuffer.c kernel/drivers/fbconsole.c \
+             kernel/drivers/cursor.c kernel/drivers/console.c \
              kernel/drivers/pic.c kernel/drivers/pit.c kernel/drivers/keyboard.c kernel/drivers/mouse.c kernel/drivers/pci.c kernel/drivers/rtc.c \
              libk/fmt.c libk/heap_alloc.c libk/ring_buffer.c libk/elf.c \
              kernel/arch/x86_64/gdt.c kernel/arch/x86_64/idt.c kernel/arch/x86_64/exceptions.c kernel/arch/x86_64/irq_dispatch.c \
-             kernel/arch/x86_64/tss.c kernel/arch/x86_64/syscall.c kernel/arch/x86_64/reboot.c \
+             kernel/arch/x86_64/tss.c kernel/arch/x86_64/syscall.c kernel/arch/x86_64/reboot.c kernel/arch/x86_64/multiboot2.c \
              kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/heap.c kernel/mm/elf_loader.c \
              kernel/sched/task.c kernel/sched/scheduler.c
 ASM_SOURCES := kernel/arch/x86_64/boot.asm kernel/arch/x86_64/gdt_flush.asm kernel/arch/x86_64/isr.asm kernel/arch/x86_64/irq.asm \
