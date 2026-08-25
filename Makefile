@@ -202,11 +202,26 @@ $(OS_ISO): $(KERNEL_ELF) boot/grub.cfg check-mb2
 # goes to this terminal via -serial stdio. Every automated QEMU
 # smoke test (tests/qemu/*.sh) invokes qemu-system-x86_64 directly with
 # its own -display none, so this doesn't touch CI/test behavior.
+#
+# Milestone 31's own GUI (draggable/closable windows,
+# kernel/user/display_server.c) is driven by a PS/2 mouse -- a
+# RELATIVE-motion device, per this codebase's own Milestone 16/23
+# doc comments -- which GTK, by default, only forwards to the guest
+# once the window has been explicitly GRABBED (click once inside it;
+# the HOST cursor then disappears, replaced by this kernel's own
+# rendered red 8x8 sprite, kernel/drivers/cursor.c; release the grab
+# with the usual QEMU hotkey, Ctrl+Alt+G). `grab-on-hover=on` (a real,
+# version-checked GTK display suboption, confirmed accepted by this
+# machine's actual installed QEMU 11.1.0 -- not assumed) grabs
+# automatically as soon as the pointer enters the window, so a user
+# who doesn't already know that click-to-grab convention still gets
+# working mouse input immediately, without a confusing "the cursor
+# won't move" first impression.
 run: $(OS_ISO)
-	$(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk
+	$(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on
 
 debug: $(OS_ISO)
-	$(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk -s -S &
+	$(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on -s -S &
 	$(GDB) $(KERNEL_ELF) -ex "target remote :1234"
 
 clean:
