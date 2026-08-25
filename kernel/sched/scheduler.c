@@ -115,6 +115,16 @@ static trap_frame_t *timer_tick_handler(trap_frame_t *frame)
         outgoing->next->prev = outgoing->prev;
         outgoing->next = zombie_head; /* reused: outgoing has left the ready queue */
         zombie_head = outgoing;
+    } else if (outgoing->state == TASK_BLOCKED) {
+        /* Milestone 25 (ADR 0025): same unlink shape as TASK_ZOMBIE
+           above, but outgoing joins no list of its own -- scheduler_
+           wake() is always called with a direct task_t* the waker
+           already holds, so there's nothing here that needs to be
+           searchable. next/prev are left dangling (not read again until
+           scheduler_wake()'s own scheduler_add_task() call overwrites
+           both unconditionally). */
+        outgoing->prev->next = outgoing->next;
+        outgoing->next->prev = outgoing->prev;
     }
 
     tss_set_rsp0(current_task->kernel_stack_top);
@@ -256,4 +266,43 @@ void scheduler_add_task(task_t *task)
     task->prev = current_task;
     current_task->next->prev = task;
     current_task->next = task;
+}
+
+void scheduler_block_current(void)
+{
+    current_task->state = TASK_BLOCKED;
+    __asm__ volatile("sti");
+    while (current_task->state == TASK_BLOCKED) {
+        __asm__ volatile("hlt");
+    }
+    __asm__ volatile("cli"); /* restore the mid-syscall IF=0 invariant every caller expects on return */
+}
+
+void scheduler_wake(task_t *task)
+{
+    /* Save/restore via a plain C variable, NOT a raw pushfq held open
+       across intervening C code -- GCC doesn't know a bare `pushfq`
+       shifted RSP by 8, and any stack-relative local/spill it emits in
+       between (perfectly free to happen at -O0 too) would silently read
+       or write the wrong slot until a matching `popfq` puts RSP back.
+       `pushfq; pop %0` is ONE atomic instruction pair inside a SINGLE
+       asm block -- net RSP effect zero, GCC never sees an imbalance --
+       with the flags value captured into an ordinary variable instead.
+       Needed at all (over plain cli/sti) because this must be safe to
+       call from either a normal task context (IF could be 0 or 1
+       beforehand) or a future interrupt-handler context (IF is always 0
+       for the handler's whole duration, idt.c's interrupt gates) -- see
+       this function's own doc comment (scheduler.h). Unconditionally
+       forcing IF back on at the end would be a real bug in the second
+       case. */
+    unsigned long flags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) : : "memory");
+
+    if (task->state == TASK_BLOCKED) {
+        scheduler_add_task(task); /* reuses the exact same ready-queue insertion logic */
+    }
+
+    if (flags & (1UL << 9)) { /* IF was set before we cli'd above -- restore it */
+        __asm__ volatile("sti");
+    }
 }

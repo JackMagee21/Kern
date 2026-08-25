@@ -78,18 +78,19 @@ Each of these becomes its own real milestone (implement, boot-test,
 ADR, commit) when reached — this is the planned ORDER and the reason
 each one is needed now, not a deliverables list.
 
-1. **Minimal userspace C runtime.** `crt0` + syscall wrappers + a tiny
-   freestanding string/memory helper subset. Proven by rewriting one
-   existing demo (`hello.asm` → a `hello.c` using the runtime) and
-   confirming byte-identical behavior against the existing smoke test.
-   Lowest-risk milestone in the arc — pure infrastructure, no new
-   kernel-side syscalls yet.
-2. **A general blocking/wake scheduler primitive.** `future.md` already
-   flagged this as deferred pending "a second real reason for two
-   processes to synchronize" — a GUI event loop (block until input OR
-   a message arrives) is exactly that reason. Generalizes Milestone
-   20's one-off `sti;hlt;cli` retry loop into a real `TASK_BLOCKED`
-   state + wake-list.
+1. **Minimal userspace C runtime — DONE (Milestone 24, ADR 0024).**
+   `crt0` + syscall wrappers + a tiny freestanding string/memory helper
+   subset. Proven by rewriting one existing demo (`hello.asm` →
+   `hello.c` using the runtime) and confirming byte-identical behavior
+   against the existing smoke tests, zero assertion changes needed.
+2. **A general blocking/wake scheduler primitive — DONE (Milestone 25,
+   ADR 0025).** `TASK_BLOCKED` + `scheduler_block_current()`/
+   `scheduler_wake()`, generalizing Milestone 20's one-off
+   `sti;hlt;cli` retry loop. No searchable wake-list turned out to be
+   needed (see ADR 0025) — a waker always already holds the specific
+   task to wake. `sys_wait` itself was deliberately NOT rewired onto
+   this yet (no concrete benefit needed for that on its own); Milestone
+   26's IPC is the primitive's first real consumer.
 3. **An IPC primitive.** Message passing and/or shared-memory mapping
    between two processes — the display server and a client need to
    exchange both control messages (open a window, here's an input

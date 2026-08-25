@@ -44,15 +44,60 @@ uint64_t scheduler_reaped_count(void);
    syscall.c's sys_fork/sys_wait). */
 task_t *scheduler_current_task(void);
 
-/* Milestone 18 (ADR 0018): non-blocking wait. If a task with
-   parent_id == caller_id (and, unless target_pid is 0, id == target_pid)
-   has exited and had its resources reclaimed but not yet been
-   collected, unlinks and frees its task_t, writes its exit code to
-   *out_exit_code (if out_exit_code != NULL), and returns its pid.
-   Returns 0 (never a valid pid -- see task.h) and leaves *out_exit_code
-   untouched if no matching task is ready yet; the caller (sys_wait) is
-   expected to poll, see sys_wait's own doc comment for why this can't
-   block instead. */
+/* Milestone 18 (ADR 0018): non-blocking wait, a single one-shot check --
+   if a task with parent_id == caller_id (and, unless target_pid is 0,
+   id == target_pid) has exited and had its resources reclaimed but not
+   yet been collected, unlinks and frees its task_t, writes its exit
+   code to *out_exit_code (if out_exit_code != NULL), and returns its
+   pid. Returns 0 (never a valid pid -- see task.h) and leaves
+   *out_exit_code untouched if no matching task is ready yet. Does NOT
+   block itself -- sys_wait (kernel/arch/x86_64/syscall.c) is what turns
+   repeated calls to this into a genuinely blocking wait (Milestone 20,
+   ADR 0020, via its own sti/hlt/cli retry loop, not yet rebuilt on top
+   of scheduler_block_current()/scheduler_wake() below -- see ADR 0025's
+   Known limitations for why that rewiring was deliberately left for a
+   later milestone). */
 uint32_t scheduler_try_wait(uint32_t caller_id, uint32_t target_pid, uint64_t *out_exit_code);
+
+/* Milestone 25 (ADR 0025): a general blocking primitive, generalizing
+   the one-off sti/hlt/cli retry loop sys_wait has used since Milestone
+   20 into a real TASK_BLOCKED state. Marks the CURRENTLY RUNNING task
+   (the caller) TASK_BLOCKED and re-enables interrupts -- the NEXT timer
+   tick notices the state change and unlinks it from the ready queue
+   (same mechanism/timing as TASK_ZOMBIE's own unlink, see
+   timer_tick_handler), so a blocked task consumes ZERO further
+   scheduler turns until scheduler_wake() explicitly relinks it, unlike
+   sys_wait's old polling design where the caller stayed TASK_READY and
+   kept getting (wasted) turns the whole time it was waiting. Does not
+   return until scheduler_wake(scheduler_current_task()) has been called
+   by someone else -- callable only from a task's own normal execution
+   context (e.g. mid-syscall, matching sys_wait's existing precedent),
+   NOT from interrupt-handler context. Contract: MUST be called with
+   interrupts already disabled (mid-syscall, IF=0, is the only context
+   this kernel calls it from so far) and ALWAYS returns with interrupts
+   disabled again -- the same in/out invariant sys_wait's own retry loop
+   already had, just factored out. */
+void scheduler_block_current(void);
+
+/* Milestone 25 (ADR 0025): wakes `task` if it is currently
+   TASK_BLOCKED (a no-op otherwise -- safe to call speculously, e.g. "in
+   case something is waiting," without the caller having to track
+   whether it actually is) by marking it TASK_READY and relinking it
+   into the ready queue next to the CURRENTLY running task (reuses
+   scheduler_add_task()'s own insertion logic exactly). Unlike
+   scheduler_block_current(), this IS safe to call from either a normal
+   task context OR interrupt-handler context: internally it saves and
+   restores the caller's OWN prior interrupt-flag state (`pushfq`/
+   `popfq` around a `cli`-protected critical section) rather than
+   unconditionally forcing interrupts on afterward -- forcing them on
+   would be a real bug if the caller turns out to already be running
+   inside an interrupt handler (IF=0 for the handler's own entire
+   duration, by design, since every exception/IRQ gate in this kernel is
+   an interrupt gate, idt.c) that hasn't finished yet. No current caller
+   needs the interrupt-handler-context case, but a future IRQ-driven
+   wake (e.g. keyboard input unblocking a waiting reader) will, so this
+   is designed for both from the start rather than needing a second,
+   redundant variant later. */
+void scheduler_wake(task_t *task);
 
 #endif /* KERNEL_SCHED_SCHEDULER_H */

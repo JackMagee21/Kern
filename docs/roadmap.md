@@ -1222,16 +1222,72 @@ syscall arguments' worth of capacity (sufficient for every syscall this
 kernel has today); no `argv`/`envp`/heap allocator in the runtime yet —
 added only once a later GUI-arc milestone actually needs one.
 
-## 25. FS, SMP, and whatever's learned by then (sequence TBD)
+## 25. General blocking/wake scheduler primitive — DONE
+Second step of the GUI arc (`Desktop.md`). `future.md` had flagged this
+as deferred pending "a second real reason for two processes to
+synchronize" — the arc's own event-loop/IPC needs are that reason.
+Generalizes Milestone 20's one-off `sys_wait`-specific `sti;hlt;cli`
+retry loop (where the caller stayed `TASK_READY` the whole time,
+wastefully polling) into a real `TASK_BLOCKED` state.
+**Proves:** a task can genuinely block (leave the ready queue entirely,
+consuming zero further scheduler turns) and later resume only once
+another task explicitly wakes it — verified deterministically, not via
+a timing race.
+**Deliverables:**
+- `kernel/sched/task.h`: new `TASK_BLOCKED` state.
+- `kernel/sched/scheduler.h/.c`: `scheduler_block_current()` (marks the
+  caller blocked, `sti`, `hlt`-loops until woken, `cli` before
+  returning — same in/out IF invariant `sys_wait`'s own loop already
+  had) and `scheduler_wake(task_t *task)` (a no-op unless the target is
+  actually blocked, otherwise relinks it via the existing
+  `scheduler_add_task()`). `timer_tick_handler` gained an `else if
+  (outgoing->state == TASK_BLOCKED)` branch unlinking it from the ready
+  queue the same way `TASK_ZOMBIE` already is — no separate list needed
+  (unlike `zombie_head`), since a waker always already holds the
+  specific `task_t*` to wake.
+- `kernel/kernel.c`: two new kernel threads with a dedicated,
+  deterministic-by-construction self-test (an explicit go/no-go handoff
+  flag, not a tuned delay — a strictly more robust technique than
+  Milestone 20's own, made possible here because this test controls
+  both sides of the interaction).
+**Verification:** `make run` boots and prints every Milestone 1-24
+marker unchanged plus the new self-test's two markers in the correct
+order. **Two real bugs were found and fixed** during this milestone —
+the first live-boot bug since Milestone 16: (1) a raw `pushfq` held
+open across intervening C code in the first draft of `scheduler_wake()`
+(GCC doesn't track a bare `RSP` shift it didn't emit itself), caught in
+review before ever booting, fixed via `pushfq; pop %0` inside one atomic
+asm block instead; (2) the actual boot hang this exposed --
+`scheduler_block_current()`'s "always returns with `IF=0`" contract is
+correct for `sys_wait`'s syscall-context caller but wrong for a KERNEL
+THREAD caller with its own trailing `hlt` loop and nothing else to
+re-enable interrupts, freezing the entire single-CPU machine (`hlt`
+with `IF=0` waits for an NMI that never comes) -- diagnosed from the
+tell that EVERY other unrelated task's progress also stopped dead at
+the same point, not just this test; fixed by adding the same explicit
+`sti` `scheduler_exit_current()` already uses before its own trailing
+loop, for the identical reason. `-d int,cpu_reset` trace (after both
+fixes): unchanged from Milestone 24. `tests/qemu/
+test_scheduler_wake_selftest.sh` (new) checks both markers, correct
+ordering, and the frame-leak self-test. All twenty-three earlier smoke
+tests and all four host test suites re-verified passing. Booted 5 times
+back to back after the fixes — identical shape every time.
+**Design record:** `docs/adr/0025-blocking-wake-scheduler-primitive.md`
+— including the full diagnostic trail for both bugs.
+**Known limitation (accepted for this milestone only):** `sys_wait`
+still uses its own Milestone 20 polling loop, not rewired onto this
+primitive (a deliberate scope boundary, not an oversight — no concrete
+benefit this milestone needs); no timeout support; no
+priority/fairness policy for multiple tasks blocked on the same
+resource (no current caller has more than one yet).
 
-Milestone 25 is intentionally left as a one-line placeholder here — full
+## 26. FS, SMP, and whatever's learned by then (sequence TBD)
+
+Milestone 26 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
-in sequence per `Desktop.md`'s GUI arc: a general blocking/wake
-scheduler primitive (generalizing Milestone 20's one-off `sys_wait`-
-specific blocking loop — a GUI event loop is the "second real caller"
-`future.md` flagged as the trigger), then an IPC primitive (likely also
+in sequence per `Desktop.md`'s GUI arc: an IPC primitive (likely also
 the real trigger for VMA tracking, deferred twice already for lack of a
 concrete consumer), then a minimal single-client display server, then
 multi-window/input-focus, then chrome/widgets, then real apps. See

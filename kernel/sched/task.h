@@ -40,16 +40,23 @@
    below it (kernel/sched/task.c's alloc_kernel_stack()), not heap
    memory.
 
-   state/next/prev (process lifecycle, ADR 0010): a task is either
-   TASK_READY, live in the scheduler's doubly-linked circular ready
-   queue (next/prev both meaningful), or TASK_ZOMBIE, unlinked from
-   that queue and instead singly-linked into the reaper's pending list
-   (next reused as that chain's link -- prev is no longer meaningful
-   once a task leaves the ready queue, so there's no need for a second
-   field just for the zombie chain too). See kernel/sched/scheduler.c
-   for why actually freeing a zombie's resources (kernel_stack_base,
-   pml4, the task_t itself) has to be deferred to a separate reaper
-   task rather than happening as soon as a task exits.
+   state/next/prev (process lifecycle, ADR 0010; TASK_BLOCKED, Milestone
+   25, ADR 0025): a task is TASK_READY (live in the scheduler's
+   doubly-linked circular ready queue, next/prev both meaningful),
+   TASK_ZOMBIE (unlinked from that queue and instead singly-linked into
+   the reaper's pending list -- next reused as that chain's link, prev
+   no longer meaningful once a task leaves the ready queue), or
+   TASK_BLOCKED (also unlinked from the ready queue by the same next
+   timer tick that notices the state change, same as TASK_ZOMBIE -- but
+   NOT linked into any list of its own: scheduler_wake() is always
+   called with a direct task_t* the waker already holds, e.g. from
+   whatever resource the task was waiting on, so there's no need for a
+   searchable global list the way zombie_head's producer/consumer shape
+   needs one). See kernel/sched/scheduler.c for why actually freeing a
+   zombie's resources (kernel_stack_base, pml4, the task_t itself) has
+   to be deferred to a separate reaper task rather than happening as
+   soon as a task exits, and for scheduler_block_current()/
+   scheduler_wake()'s own contracts.
 
    parent_id/exit_code (Milestone 18, ADR 0018, fork/wait): parent_id
    is 0 for any task NOT created via task_fork() (every kernel thread,
@@ -81,6 +88,7 @@
 typedef enum {
     TASK_READY,
     TASK_ZOMBIE,
+    TASK_BLOCKED,
 } task_state_t;
 
 typedef struct task {

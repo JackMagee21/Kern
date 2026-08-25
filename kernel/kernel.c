@@ -57,6 +57,65 @@ static void demo_task_b(void)
     }
 }
 
+/* Milestone 25 (ADR 0025) self-test state: proves scheduler_block_
+   current()/scheduler_wake() genuinely block and resume a task, not
+   just that neither function crashes. block_test_blocker sets
+   block_test_reached_block_point immediately before blocking and
+   block_test_woke_up immediately after resuming -- kernel_main's own
+   self-test observes reached_block_point==true WHILE woke_up is still
+   false (proving a genuine block actually happened, not an instant
+   no-op), THEN explicitly releases block_test_waker (via block_test_
+   observed_still_blocked) to actually call scheduler_wake(), THEN
+   observes woke_up become true (proving scheduler_wake() actually
+   resumed it). Ordering here is deterministic BY CONSTRUCTION (an
+   explicit go/no-go handoff flag), not by tuning a delay constant
+   against "the worst-case scheduling delay" the way Milestone 20's own
+   blocking self-test had to (ADR 0020) -- a strictly more robust
+   technique than that one, made possible here because, unlike that
+   milestone, this test controls BOTH sides of the race (its own two
+   dedicated threads) rather than reusing an unrelated demo program's
+   independent timing. Both threads are kernel threads (task_create(),
+   never exit), same single-writer-per-flag reasoning as the Milestone 6
+   counters above (each flag has exactly one writer). */
+static volatile bool block_test_reached_block_point;
+static volatile bool block_test_observed_still_blocked;
+static volatile bool block_test_woke_up;
+static task_t *block_test_blocker_task;
+
+static void block_test_blocker(void)
+{
+    block_test_reached_block_point = true;
+    scheduler_block_current();
+    block_test_woke_up = true;
+    /* scheduler_block_current() always returns with IF=0 (its
+       documented contract, matching sys_wait's syscall-context needs --
+       a syscall's own sysret naturally restores the right flags
+       afterward). This caller is a kernel thread, not mid-syscall --
+       nothing else re-enables interrupts for it -- exactly the same
+       reason scheduler_exit_current() explicitly sti's before ITS OWN
+       trailing hlt loop (scheduler.c). Skipping this hangs the entire
+       single-CPU machine forever: hlt with IF=0 halts until an NMI,
+       which never comes, so no timer tick can ever fire again for
+       ANY task, not just this one -- found by reasoning through the
+       actual observed hang (every other unrelated task's progress
+       also stopped dead at the same point), not guessed. */
+    __asm__ volatile("sti");
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
+static void block_test_waker(void)
+{
+    while (!block_test_observed_still_blocked) {
+        __asm__ volatile("hlt");
+    }
+    scheduler_wake(block_test_blocker_task);
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
 /* Milestone 13 (ADR 0013) self-test state: single-writer (pci_scan()'s
    callback runs synchronously, once per found device, all from one
    pci_scan() call on the bootstrap task) -- no synchronization needed,
@@ -321,6 +380,15 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     scheduler_add_task(task_a);
     scheduler_add_task(task_create(demo_task_b));
 
+    /* Milestone 25 (ADR 0025): the block/wake self-test's two threads
+       join the rotation here too, alongside the Milestone 6 demo tasks
+       -- same "just another two participants in the round-robin"
+       treatment. block_test_blocker_task is captured so block_test_
+       waker (added right after) has a concrete task_t* to wake. */
+    block_test_blocker_task = task_create(block_test_blocker);
+    scheduler_add_task(block_test_blocker_task);
+    scheduler_add_task(task_create(block_test_waker));
+
     /* Milestone 12 (ADR 0012) self-test: task_a's kernel-mode stack
        (kernel_stack_base) is one of alloc_kernel_stack()'s dedicated,
        guard-paged VA slots (kernel/sched/task.c) -- confirm the page
@@ -397,6 +465,27 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     pic_clear_mask(12); /* IRQ12: mouse */
     __asm__ volatile("sti");
     console_write("[OK] pic/pit/keyboard/mouse initialized, IRQ0+IRQ1+IRQ2+IRQ12 unmasked\n");
+
+    /* Milestone 25 (ADR 0025) self-test: the round-robin only starts
+       actually preempting tasks once interrupts are enabled (just
+       above), so this is the earliest point block_test_blocker could
+       possibly have reached its own block point -- placed here,
+       strictly before the Milestone 5 timer self-test's own 100-tick
+       wait, so this test's ordering never depends on that unrelated
+       wait completing first. */
+    while (!block_test_reached_block_point) {
+        __asm__ volatile("hlt");
+    }
+    if (block_test_woke_up) {
+        panic("blocking/wake self-test failed: blocker resumed before scheduler_wake() was ever called (never actually blocked)");
+    }
+    console_write("[OK] blocking/wake self-test: task genuinely blocked, confirmed not yet woken\n");
+    block_test_observed_still_blocked = true; /* release block_test_waker to actually call scheduler_wake() now */
+
+    while (!block_test_woke_up) {
+        __asm__ volatile("hlt");
+    }
+    console_write("[OK] blocking/wake self-test passed, task correctly resumed after scheduler_wake()\n");
 
     /* Milestone 5 self-test: wait for real IRQ0 ticks to accumulate
        instead of just checking pit_init() didn't crash -- proves the

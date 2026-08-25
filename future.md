@@ -17,11 +17,11 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 24 (2026-08-25)
+## State as of Milestone 25 (2026-08-25)
 
 **GUI arc in progress** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
-with the user). Milestone 24 (below) is the first step of that arc.
+with the user). Milestones 24-25 (below) are the first two steps.
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -190,25 +190,51 @@ the design reasoning and any real bugs found along the way.
     to match byte-for-byte; a new test would have been strictly weaker
     proof than that. See ADR 0024.
 
-**Testing state:** 23 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+25. **General blocking/wake scheduler primitive** — `TASK_BLOCKED`
+    (`kernel/sched/task.h`) plus `scheduler_block_current()`/
+    `scheduler_wake()` (`kernel/sched/scheduler.c`) generalize
+    Milestone 20's one-off `sys_wait`-specific polling loop: a blocked
+    task now genuinely leaves the ready queue (zero wasted turns) until
+    another task explicitly wakes it, verified via a deterministic
+    (explicit handoff flag, not a tuned delay) two-kernel-thread
+    self-test. Two real bugs found and fixed this milestone — the first
+    live-boot bug since Milestone 16: a raw `pushfq` held open across
+    intervening C code in `scheduler_wake()`'s first draft (caught in
+    review before booting) and, the actual boot hang, `scheduler_block_
+    current()`'s "returns with IF=0" contract being wrong for a KERNEL
+    THREAD caller with no syscall return path to re-enable interrupts
+    for it — diagnosed from the tell that the ENTIRE machine froze, not
+    just this one test, then fixed with the same explicit `sti`
+    `scheduler_exit_current()` already uses before its own trailing
+    loop. `sys_wait` itself is NOT yet rewired onto this primitive
+    (deliberate scope boundary — no concrete benefit needed yet). See
+    ADR 0025.
+
+**Testing state:** 24 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Almost every milestone has its own dedicated smoke
-test (Milestone 24 is the first exception — see item 24 above for why
+test (Milestone 24 is the one exception — see item 24 above for why
 reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** eighteen milestones
-(9-24) all followed the same pattern — implement, boot in QEMU for
+**A note on process discipline that held up well:** nineteen milestones
+(9-25) all followed the same pattern — implement, boot in QEMU for
 real, fix what actually breaks, write the ADR describing what was
 tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15, 17-19, and 21-24 all landed correctly
-on the first real boot; Milestone 9 (per-process address spaces) and
-Milestone 16 (PS/2 mouse) each hit one genuine bug that needed real
-diagnosis (not guessing) to fix — both are documented in detail in
-their ADRs (0009, 0016) specifically so the diagnostic *method*, not
-just the fix, is preserved for next time something in this territory
-breaks. Milestone 20 is its own diagnosis story worth naming
+logical pieces. Milestones 10-15, 17-19, 21-22, and 24 all landed
+correctly on the first real boot; Milestone 9 (per-process address
+spaces), Milestone 16 (PS/2 mouse), and Milestone 25 (blocking/wake
+primitive) each hit real bugs that needed real diagnosis (not guessing)
+to fix — all are documented in detail in their ADRs (0009, 0016, 0025)
+specifically so the diagnostic *method*, not just the fix, is preserved
+for next time something in this territory breaks. Milestone 25's own
+bug is worth naming specifically: the boot didn't just fail one
+assertion, it froze SOLID (every unrelated task's progress stopped
+dead) — recognizing that a total, machine-wide freeze (not an isolated
+test failure) was the actual diagnostic signal is what pointed straight
+at "interrupts got permanently disabled" rather than a logic bug local
+to the new test. Milestone 20 is its own diagnosis story worth naming
 separately: the `saved_user_rsp` bug (see item 20 above) was never
 observed as a live QEMU failure — it was found by reasoning through
 what "another task's syscall can now genuinely interleave" implies
@@ -261,14 +287,13 @@ signal CLAUDE.md asks for before this territory gets touched.
 
 ## Reasonable next steps (not flagged, not started)
 
-The main line of "what's next" is now `Desktop.md`'s GUI arc (Milestone
-24 done; Milestone 25 = a general blocking/wake scheduler primitive,
-then IPC — likely the real trigger for VMA tracking, deferred twice
-already for lack of a concrete consumer — then a minimal display
-server, then multi-window/input-focus, then chrome/widgets, then real
-apps). A real path-based `execve` remains blocked on the filesystem
-non-goal, which `Desktop.md`'s scope confirmation keeps deferred for
-this whole arc.
+The main line of "what's next" is now `Desktop.md`'s GUI arc (Milestones
+24-25 done; Milestone 26 = an IPC primitive — likely the real trigger
+for VMA tracking, deferred twice already for lack of a concrete
+consumer — then a minimal display server, then multi-window/input-
+focus, then chrome/widgets, then real apps). A real path-based `execve`
+remains blocked on the filesystem non-goal, which `Desktop.md`'s scope
+confirmation keeps deferred for this whole arc.
 
 A few smaller items outside that arc, not touching a non-goal:
 
