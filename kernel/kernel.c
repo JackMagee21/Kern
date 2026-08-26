@@ -30,17 +30,23 @@
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289u
 
-/* Milestone 30 (ADR 0030) / Milestone 33 (ADR 0033): see the
-   process-lifecycle self-test's own doc comment (below, where this is
-   used) for the full derivation -- 2 windows (clients A/B) *
-   ceil(200*150*4 / PMM_FRAME_SIZE) = 30 pages each, permanently held
-   by the (deliberately baseline-excluded) persistent display server's
-   own second reference, PLUS 1 window (the pulse app, Milestone 33) *
-   ceil(150*100*4 / PMM_FRAME_SIZE) = 15 pages, held permanently for a
-   slightly different reason -- not just the server's own second
-   reference, but the pulse app's OWN first reference too, since unlike
-   A/B it never exits either. 30 + 30 + 15 = 75. */
-#define DISPLAY_SERVER_PERMANENT_CANVAS_PAGES 75u
+/* Milestone 30 (ADR 0030) / Milestone 33 (ADR 0033) / Milestone 35
+   (ADR 0035): see the process-lifecycle self-test's own doc comment
+   (below, where this is used) for the full derivation -- 2 windows
+   (clients A/B) * ceil(200*150*4 / PMM_FRAME_SIZE) = 30 pages each,
+   permanently held by the (deliberately baseline-excluded) persistent
+   display server's own second reference, PLUS 1 window (the pulse app,
+   Milestone 33) * ceil(150*100*4 / PMM_FRAME_SIZE) = 15 pages, PLUS 1
+   window (the clock app, Milestone 35) * ceil(190*50*4 / PMM_FRAME_SIZE)
+   = 10 pages -- both held permanently for the same reason: not just
+   the server's own second reference, but each app's OWN first
+   reference too, since unlike A/B neither ever exits on its own
+   during a normal boot (both CAN exit if their window is explicitly
+   closed, Milestone 34 -- but kernel_main's own self-tests, including
+   this one, all run before the shell prompt, strictly before any close
+   could ever be injected, so the default boot path this baseline
+   describes is unaffected). 30 + 30 + 15 + 10 = 85. */
+#define DISPLAY_SERVER_PERMANENT_CANVAS_PAGES 85u
 
 extern const uint8_t fork_demo_image_start[]; /* kernel/user/embed/fork_demo_blob.asm: embedded build/kernel/user/fork_demo.elf */
 extern const uint8_t fork_demo_image_end[];
@@ -58,6 +64,8 @@ extern const uint8_t display_client_b_image_start[]; /* kernel/user/embed/displa
 extern const uint8_t display_client_b_image_end[];
 extern const uint8_t pulse_app_image_start[]; /* kernel/user/embed/pulse_app_blob.asm: embedded build/kernel/user/pulse_app.elf */
 extern const uint8_t pulse_app_image_end[];
+extern const uint8_t clock_app_image_start[]; /* kernel/user/embed/clock_app_blob.asm: embedded build/kernel/user/clock_app.elf */
+extern const uint8_t clock_app_image_end[];
 
 /* Milestone 6 self-test: two kernel threads that never voluntarily
    yield, proving the scheduler forcibly preempts a task that never
@@ -461,7 +469,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     scheduler_add_task(display_server_process);
     console_write("[OK] display server process created, pid 0x");
     console_write_hex(display_server_process->id);
-    console_write(" (persistent -- serves its three clients below, then waits forever for input)\n");
+    console_write(" (persistent -- serves its four clients below, then waits forever for input)\n");
 
     /* Milestone 33 (ADR 0033): the pulse app -- created HERE too, in
        this same "permanent process" zone, before the frame-leak
@@ -478,6 +486,16 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write("[OK] pulse app process created, pid 0x");
     console_write_hex(pulse_app_process->id);
     console_write(" (persistent -- animates its own window forever once it joins the server)\n");
+
+    /* Milestone 35 (ADR 0035): the clock app -- same "permanent
+       process" zone, same reason as the display server and pulse app
+       just above: its own event loop never returns during a normal
+       boot either (it keeps ticking forever). */
+    task_t *clock_app_process = task_create_user_image(clock_app_image_start, clock_app_image_end);
+    scheduler_add_task(clock_app_process);
+    console_write("[OK] clock app process created, pid 0x");
+    console_write_hex(clock_app_process->id);
+    console_write(" (persistent -- ticks its own window forever once it joins the server)\n");
 
     /* Milestone 10 (ADR 0010) self-test setup: captured BEFORE either
        process exists, so that once both have exited and been fully
@@ -573,20 +591,22 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028) / Milestone 30
        (ADR 0030): a NINTH and TENTH orphan process -- Desktop.md's
        display server's first two (bounded, exiting) clients. The
-       server itself, and the pulse app (Milestone 33's own THIRD
-       client, but a PERSISTENT one, not counted here -- see its own
-       creation site's comment above), were already created earlier
-       (before the frame-leak baseline), so both pids are already
-       known. CLIENT B is created before CLIENT A, purely so client A's
-       own bootstrap message (which carries client B's pid, for the
-       go-signal hand-off) can be built here -- this is a compile-time/
-       code-ordering constraint only, NOT a scheduling one: client B
-       cannot possibly act on anything before client A's own go-signal
-       arrives regardless of which of the two the scheduler actually
-       runs first (see display_client_b.c's own comment). Client B's
-       own bootstrap message now also carries the pulse app's pid
-       (Milestone 33), so IT can forward the go-signal one more link
-       down the A -> B -> C chain once its own window has landed. */
+       server itself, the pulse app (Milestone 33's own THIRD client),
+       and the clock app (Milestone 35's own FOURTH) -- all persistent,
+       not counted here -- were already created earlier (before the
+       frame-leak baseline), so every pid is already known. CLIENT B is
+       created before CLIENT A, purely so client A's own bootstrap
+       message (which carries client B's pid, for the go-signal
+       hand-off) can be built here -- this is a compile-time/code-
+       ordering constraint only, NOT a scheduling one: client B cannot
+       possibly act on anything before client A's own go-signal arrives
+       regardless of which of the two the scheduler actually runs first
+       (see display_client_b.c's own comment). Client B's own bootstrap
+       message also carries the pulse app's pid (Milestone 33), so IT
+       can forward the go-signal one more link down the A -> B -> C
+       chain; the pulse app's own bootstrap message now carries the
+       clock app's pid too (Milestone 35), extending the chain to
+       A -> B -> C -> D. */
     task_t *display_client_b_process = task_create_user_image(display_client_b_image_start, display_client_b_image_end);
     scheduler_add_task(display_client_b_process);
     task_t *display_client_a_process = task_create_user_image(display_client_a_image_start, display_client_a_image_end);
@@ -599,9 +619,13 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (!ipc_send(display_client_b_process, &display_b_boot_msg)) {
         panic("kernel_main: failed to inject display client B's own bootstrap message (inbox somehow already full)");
     }
-    ipc_message_t pulse_app_boot_msg = { .fields = { display_server_process->id, 0, 0, 0 } };
+    ipc_message_t pulse_app_boot_msg = { .fields = { display_server_process->id, clock_app_process->id, 0, 0 } };
     if (!ipc_send(pulse_app_process, &pulse_app_boot_msg)) {
         panic("kernel_main: failed to inject the pulse app's own bootstrap message (inbox somehow already full)");
+    }
+    ipc_message_t clock_app_boot_msg = { .fields = { display_server_process->id, 0, 0, 0 } };
+    if (!ipc_send(clock_app_process, &clock_app_boot_msg)) {
+        panic("kernel_main: failed to inject the clock app's own bootstrap message (inbox somehow already full)");
     }
     console_write("[OK] display server/client processes created, server pid 0x");
     console_write_hex(display_server_process->id);
@@ -611,6 +635,8 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(display_client_b_process->id);
     console_write(", pulse app pid 0x");
     console_write_hex(pulse_app_process->id);
+    console_write(", clock app pid 0x");
+    console_write_hex(clock_app_process->id);
     console_write("\n");
 
     keyboard_init();
@@ -755,7 +781,13 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        PMM_FRAME_SIZE(4096) = 15 pages -- never comes back either, not
        because of the server's second reference (though that exists
        too) but because the pulse app's OWN first reference is never
-       dropped, since it never exits. 60 + 15 = 75
+       dropped, since it never exits. Milestone 35 adds a FOURTH, same-
+       shape case: the clock app (kernel/user/clock_app.c) is also
+       persistent (also created before this baseline) for the identical
+       reason -- its own canvas -- 190 * 50 * 4 = 38000 bytes, ceil-
+       divided by PMM_FRAME_SIZE(4096) = 10 pages -- never comes back
+       either, for the same "its own first reference is never dropped"
+       reason as the pulse app's own 15-page deficit. 60 + 15 + 10 = 85
        (DISPLAY_SERVER_PERMANENT_CANVAS_PAGES, duplicated here as a
        plain constant matching each source's own dimensions, the same
        "both sides hardcode consistently" pattern already used for
@@ -775,7 +807,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     }
     console_write("[OK] process lifecycle self-test passed, all ring-3 processes exited and were fully reaped (0x");
     console_write_hex(frames_after_reap);
-    console_write(" frames free, matches pre-creation baseline minus the display server/pulse app's own permanently-held canvas buffers)\n");
+    console_write(" frames free, matches pre-creation baseline minus the display server/pulse app/clock app's own permanently-held canvas buffers)\n");
 
     /* Milestone 20 (ADR 0020): proves sys_wait REALLY blocked at least
        once, not just that it eventually returned the right answer --
@@ -839,34 +871,36 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write(" turns) before the sender's message arrived\n");
 
     /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028) / Milestone 31
-       (ADR 0031) / Milestone 33 (ADR 0033): proves sys_fb_present
-       genuinely blitted into the real framebuffer, not just that the
-       display server/clients' own success markers printed above --
-       the same "prove the new syscall path was actually exercised,
-       not just correct by luck" pattern syscall_get_exec_count()/
-       syscall_get_ipc_recv_block_count() already established. TWO
-       calls per window (Milestone 31 added a server-drawn title bar,
-       presented separately from the client's own canvas,
-       kernel/user/display_server.c's own present_window()), THREE
-       windows now (Milestone 33 added the pulse app) -- so the initial
-       setup loop alone always produces AT LEAST 6. Checks "< 6", not
-       "!= 6": unlike every earlier window, the pulse app keeps
-       redrawing itself in the background (DISPLAY_OP_REDRAW,
-       display_server.c), and each such redraw recomposites all THREE
-       windows again (composite_all(), 6 more presents) -- whether zero,
-       one, or several of those have already happened by the exact
-       moment this check runs depends on real scheduling timing, so an
-       exact count would be non-deterministic. "< 6" stays just as
-       strict at catching a REAL failure (some window's chrome or
-       canvas silently never landing during initial setup) while
-       correctly tolerating any number of legitimate extra redraws. The
-       ACTUAL pixel-level proof that every window lands at the right
-       place, at the right (bound-enforced) size, in the right z-order,
-       and nowhere else, is tests/qemu/test_display_server_selftest.sh's
-       own real QEMU screendump check -- this counter only proves the
-       syscalls ran, not where they drew. */
-    if (syscall_get_fb_present_count() < 6) {
-        panic("display server self-test failed: sys_fb_present blitted fewer than 6 frames (some window's chrome or canvas landed silently, or too few)");
+       (ADR 0031) / Milestone 33 (ADR 0033) / Milestone 35 (ADR 0035):
+       proves sys_fb_present genuinely blitted into the real
+       framebuffer, not just that the display server/clients' own
+       success markers printed above -- the same "prove the new syscall
+       path was actually exercised, not just correct by luck" pattern
+       syscall_get_exec_count()/syscall_get_ipc_recv_block_count()
+       already established. TWO calls per window (Milestone 31 added a
+       server-drawn title bar, presented separately from the client's
+       own canvas, kernel/user/display_server.c's own present_window()),
+       FOUR windows now (Milestone 33 added the pulse app, Milestone 35
+       added the clock app) -- so the initial setup loop alone always
+       produces AT LEAST 8. Checks "< 8", not "!= 8": unlike clients
+       A/B, the pulse app and clock app both keep redrawing themselves
+       in the background (DISPLAY_OP_REDRAW, display_server.c), and
+       each such redraw recomposites all FOUR windows again
+       (composite_all(), 8 more presents) -- whether zero, one, or
+       several of those have already happened by the exact moment this
+       check runs depends on real scheduling timing (and, for the clock
+       app, real wall-clock seconds actually ticking over), so an exact
+       count would be non-deterministic. "< 8" stays just as strict at
+       catching a REAL failure (some window's chrome or canvas silently
+       never landing during initial setup) while correctly tolerating
+       any number of legitimate extra redraws. The ACTUAL pixel-level
+       proof that every window lands at the right place, at the right
+       (bound-enforced) size, in the right z-order, and nowhere else, is
+       tests/qemu/test_display_server_selftest.sh's own real QEMU
+       screendump check -- this counter only proves the syscalls ran,
+       not where they drew. */
+    if (syscall_get_fb_present_count() < 8) {
+        panic("display server self-test failed: sys_fb_present blitted fewer than 8 frames (some window's chrome or canvas landed silently, or too few)");
     }
     console_write("[OK] display server self-test passed, sys_fb_present blitted 0x");
     console_write_hex(syscall_get_fb_present_count());

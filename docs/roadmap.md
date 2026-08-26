@@ -1854,3 +1854,54 @@ canvas is still never dropped (the server itself never exits) — an
 unrelated, pre-existing, intentional property, unchanged by this
 milestone. Clients A/B still don't listen for `DISPLAY_OP_EXIT` (they
 don't need to — already gone by the time a close is possible).
+
+## 35. A real clock app
+
+`future.md`'s own "Reasonable next steps" and Milestone 33's own
+Rejected alternatives both explicitly named this as future work,
+blocked on exactly two things: a `sys_*` wrapper for
+`kernel/drivers/rtc.c`'s existing (kernel-only) `rtc_read()`, and a way
+for a persistent client to notice a close without blocking its own
+loop. Milestone 34 delivered the second; this milestone delivers the
+first and builds the actual clock.
+
+**Deliverables:**
+- `sys_rtc_read` (`SYS_RTC_READ`, syscall 14) — a thin wrapper around
+  the already-existing, already-tested `rtc_read()`; port I/O is
+  ring-0-only, so this is the only way ring-3 code can ever read real
+  time. `rtc_time_t` (`kernel/drivers/rtc.h`) is shared with userspace
+  directly (already a plain POD struct), the same way `ipc_message_t`
+  already is.
+- `kernel/user/clock_app.c` — a fourth window, rendering real
+  `HH:MM:SS` with a small self-contained 3x5-pixel digit font (11
+  hardcoded glyphs: 0-9 and `:`), deliberately NOT built on
+  `fbconsole.c`'s own console-shaped font machinery. Only redraws (and
+  pings the server) when the displayed second actually changes, not on
+  every poll.
+- Joins the go-signal chain one link further: A → B → pulse app → clock
+  app. Supports `DISPLAY_OP_EXIT` (Milestone 34) from the moment it was
+  created, not retrofitted — proof that mechanism generalizes cleanly
+  to a second persistent client.
+- `WINDOWS_TOTAL` raised 3 → 4 needed no other `display_server.c`
+  change — `raise_to_top()`'s general shift loop and `composite_all()`'s
+  own design (both Milestone 33) already generalize to any window
+  count. `DISPLAY_SERVER_PERMANENT_CANVAS_PAGES` raised 75 → 85 (a real,
+  hand-derived +10 pages for the clock app's own 190×50 canvas, the
+  same "persistent client's own first reference never drops" reasoning
+  as the pulse app's own +15).
+
+**Verification:** `tests/qemu/test_clock_app_selftest.sh` (new) — two
+real screendumps three seconds apart confirm the clock's own region
+contains real digit pixels AND genuinely differs between the two (not
+a static image), then a real close-click confirms the same
+three-independent-facts exit proof Milestone 34 established (server
+marker, client's own exit-received marker, real reap marker). Booted
+clean on the first real attempt; clean under real KVM through the
+identical close/exit/reap sequence, zero `#GP` faults. All twenty-nine
+pre-existing smoke tests and all four host suites re-verified passing.
+**Design record:** `docs/adr/0035-real-clock-app.md`.
+**Known limitations (accepted for this milestone only):** one-second
+resolution only (the RTC's own native granularity); no timezone
+handling (raw hardware time, unchanged `rtc_read()` contract); no date
+display, deliberately a clock and not a calendar; `WINDOWS_TOTAL` is
+still a fixed compile-time constant.

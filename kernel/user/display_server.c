@@ -57,7 +57,14 @@
    first client that could still be alive when its window closes.
    window_t gained a `pid` field (filled in once at grant time from the
    client's own DISPLAY_OP_REQUEST) so handle_click()'s close branch
-   knows who to tell. */
+   knows who to tell.
+
+   Milestone 35 (ADR 0035): a fourth window, kernel/user/clock_app.c --
+   a real clock, reading actual wall-clock time via the new
+   sys_rtc_read() syscall. WINDOWS_TOTAL raised 3 -> 4; needed no other
+   change here at all, since raise_to_top()'s general shift loop
+   (Milestone 33) and composite_all()'s own "read every window's
+   current `va`" design already generalize to any WINDOWS_TOTAL. */
 
 #include <stdint.h>
 
@@ -92,10 +99,11 @@
    position; dragging must not be able to undo that fix. */
 #define FBCONSOLE_MAX_HEIGHT_PX 480u
 
-/* Milestone 30 (ADR 0030) / Milestone 33 (ADR 0033): a fixed cascade
-   placement, one entry per client, in the exact order this server
-   expects to serve them (client A first, client B second, the pulse
-   app third -- enforced by the A->B->C go-signal chain, not assumed).
+/* Milestone 30 (ADR 0030) / Milestone 33 (ADR 0033) / Milestone 35
+   (ADR 0035): a fixed cascade placement, one entry per client, in the
+   exact order this server expects to serve them (client A first,
+   client B second, the pulse app third, the clock app fourth --
+   enforced by the A->B->C->D go-signal chain, not assumed).
    Window 1 is offset (+50, +50) from window 0 so their granted
    200x150/200x150 canvases genuinely overlap (a 150x100 shared
    region) -- windows A/B's own exact-pixel test assertions
@@ -104,12 +112,17 @@
    Window 2 (the pulse app) is placed well clear of both -- x=650
    leaves a wide gap past window 1's own rightmost extent (150 + 200 =
    350), so it never overlaps A or B and can't perturb either test's
-   pixel counts. y >= FBCONSOLE_MAX_HEIGHT_PX + CHROME_H so even each
-   window's OWN title bar starts outside the console's reserved scroll
-   region from the moment it's first drawn. */
-#define WINDOWS_TOTAL 3u
-static const uint32_t window_x[WINDOWS_TOTAL] = { 100u, 150u, 650u };
-static const uint32_t window_y[WINDOWS_TOTAL] = { 500u, 550u, 520u };
+   pixel counts. Window 3 (the clock app) sits directly below window 2
+   at the SAME x (650) but y=700 -- window 2's own chrome+canvas
+   footprint ends at y=620 (520 + 100), well clear of window 3's own
+   chrome starting at 680 (700 - CHROME_H), and 700 + 50 = 750 stays
+   within the negotiated 768px screen height. y >= FBCONSOLE_MAX_HEIGHT_PX
+   + CHROME_H (windows 0-2) so even each window's OWN title bar starts
+   outside the console's reserved scroll region from the moment it's
+   first drawn -- window 3 clears this by construction too (700 > 480). */
+#define WINDOWS_TOTAL 4u
+static const uint32_t window_x[WINDOWS_TOTAL] = { 100u, 150u, 650u, 650u };
+static const uint32_t window_y[WINDOWS_TOTAL] = { 500u, 550u, 520u, 700u };
 
 /* Milestone 30: each window's full state, kept alive for the server's
    ENTIRE (persistent) lifetime -- recompositing on a raise/drag needs

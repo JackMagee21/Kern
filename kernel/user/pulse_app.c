@@ -30,7 +30,11 @@
    frame it polls (sys_ipc_try_recv(), never blocking) for a server-
    sent DISPLAY_OP_EXIT, the real fix for the gap Milestone 33's own
    Known limitations flagged: closing this window used to leave this
-   process spinning forever with nothing displaying it. */
+   process spinning forever with nothing displaying it.
+
+   Milestone 35 (ADR 0035): now forwards the go-signal chain one link
+   further, to kernel/user/clock_app.c -- the boot message this process
+   receives now carries the clock app's pid as fields[1] as well. */
 
 #include <stdint.h>
 
@@ -74,8 +78,9 @@ static const char msg_exit[] = "[OK] pulse app: received exit request, exiting\n
 int main(void)
 {
     ipc_message_t boot;
-    sys_ipc_recv(&boot); /* kernel_main's own bootstrap message: fields[0] = the display server's pid */
+    sys_ipc_recv(&boot); /* kernel_main's own bootstrap message: fields[0] = the display server's pid, fields[1] = the clock app's pid (Milestone 35) */
     uint64_t server_pid = boot.fields[0];
+    uint64_t clock_app_pid = boot.fields[1];
 
     ipc_message_t go;
     sys_ipc_recv(&go); /* blocks until client B's DISPLAY_OP_GO arrives -- both A and B's windows are guaranteed already on screen by then */
@@ -123,6 +128,16 @@ int main(void)
     sys_ipc_recv(&ack); /* waits for the server's own confirmation this canvas actually landed -- see display_client_a.c's identical comment */
 
     sys_write(msg_ok, sizeof(msg_ok) - 1);
+
+    /* Milestone 35 (ADR 0035): forwards the go-signal one link further
+       -- the SAME A -> B -> C -> D chain this process itself joined in
+       Milestone 33, extended to the clock app now that this process's
+       OWN canvas is confirmed on screen (the ACK just received above).
+       Keeps the server's fixed per-slot window_x[3]/window_y[3]
+       assignment deterministic by construction, same reasoning as
+       every earlier link. */
+    ipc_message_t go_d = { .fields = { DISPLAY_OP_GO, 0, 0, 0 } };
+    sys_ipc_send(clock_app_pid, &go_d);
 
     /* Milestone 33: unlike every earlier client, this process never
        exits on its own -- it keeps rewriting its OWN already-mapped

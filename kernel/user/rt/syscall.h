@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "../../ipc/ipc_message.h" /* ipc_message_t -- the shared kernel/user wire format, Milestone 26 */
+#include "../../drivers/rtc.h" /* rtc_time_t -- a plain POD struct (stdint fields only), safe to share with userspace the same way ipc_message_t already is, Milestone 35 */
 
 /* Milestone 24: thin wrappers around this kernel's own syscall ABI
    (kernel/arch/x86_64/syscall.h's SYS_* numbers and calling convention
@@ -69,5 +70,11 @@ uint64_t sys_fb_present(uint64_t x, uint64_t y, uint64_t w, uint64_t h, const vo
    the SAME process) fails. Returns 0 on success, (uint64_t)-1 on
    failure. */
 uint64_t sys_input_subscribe(void);
+
+/* Milestone 35 (ADR 0035): reads real wall-clock time from the CMOS
+   RTC into *out. Always succeeds (rtc_read() itself has no failure
+   mode). The only way ring-3 code can ever read real time -- port
+   I/O is ring-0-only. */
+void sys_rtc_read(rtc_time_t *out);
 
 #endif /* KERNEL_USER_RT_SYSCALL_H */

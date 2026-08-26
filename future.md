@@ -17,15 +17,14 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 34 (2026-08-26)
+## State as of Milestone 35 (2026-08-26)
 
 **GUI arc COMPLETE** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
 with the user). Milestones 24-31 and 33 (below) are all seven of
-Desktop.md's own numbered items; Milestone 32 is a core correctness fix
-outside the GUI arc's own numbering, and Milestone 34 is real
-GUI-arc-adjacent follow-on work (both see their own entries below and
-`docs/roadmap.md`).
+Desktop.md's own numbered items; Milestones 32, 34, and 35 are real
+follow-on work outside the arc's own numbering (all see their own
+entries below and `docs/roadmap.md`).
 
 Milestone 32 also got a real follow-up fix this session: a genuine
 `#GP` under KVM while actually dragging a window, root-caused to the
@@ -431,8 +430,25 @@ the design reasoning and any real bugs found along the way.
     boot through the identical sequence — deliberately exercised under
     KVM since this is exactly the code path ADR 0032's own bug class
     lived in. See ADR 0034.
+35. **A real clock app** — a fourth window
+    (`kernel/user/clock_app.c`), rendering real `HH:MM:SS` via a new
+    `sys_rtc_read` syscall (a thin wrapper around the already-existing
+    `rtc_read()` — port I/O is ring-0-only, so this is the only way
+    ring-3 code can read real time) and a small self-contained 3x5-pixel
+    digit font, deliberately not built on `fbconsole.c`'s own
+    console-shaped font machinery. Only redraws when the displayed
+    second actually changes. Joins the go-signal chain one link further
+    (A → B → pulse app → clock app) and supports `DISPLAY_OP_EXIT`
+    (Milestone 34) from the moment it was created, not retrofitted —
+    proof that mechanism generalizes to a second persistent client.
+    Verified with a new smoke test: two real screendumps three seconds
+    apart confirm the digits genuinely change (not a static image),
+    then a real close-click confirms the same three-fact exit proof
+    Milestone 34 established. Booted clean on the first real attempt;
+    clean under real KVM through the identical close/exit/reap
+    sequence. See ADR 0035.
 
-**Testing state:** 29 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+**Testing state:** 30 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Almost every milestone has its own dedicated smoke
 test (Milestone 24 is the one exception — see item 24 above for why
@@ -440,12 +456,12 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** twenty-eight
-milestones (9-34) all followed the same pattern — implement, boot in
+**A note on process discipline that held up well:** twenty-nine
+milestones (9-35) all followed the same pattern — implement, boot in
 QEMU for real, fix what actually breaks, write the ADR describing what
 was tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15, 17-19, 21-22, 24, 27, 29, 31, and 34
-all landed correctly on the first real boot (Milestone 29's own real find
+logical pieces. Milestones 10-15, 17-19, 21-22, 24, 27, 29, 31, 34, and
+35 all landed correctly on the first real boot (Milestone 29's own real find
 — a process blocking forever for external input would hang every OTHER
 test's reap-count gate — was caught in review, before ever booting, not
 from a live failure); Milestone 9 (per-process address spaces),
@@ -537,10 +553,9 @@ signal CLAUDE.md asks for before this territory gets touched.
 `Desktop.md`'s GUI arc (Milestones 24-31 and 33; Milestone 32 was a core
 correctness fix outside the arc's own numbering) is now COMPLETE — all
 seven of Desktop.md's own items are done. Milestone 34 (real client
-exit/close protocol, see its own entry above and ADR 0034) closed the
-top item this section used to flag. There is no single obvious "next
-arc" the way the GUI arc was; a few concrete candidates remain, none
-flagged as a non-goal, none started:
+exit/close protocol, ADR 0034) and Milestone 35 (a real clock app, ADR
+0035) closed the two concrete items this section used to flag. There is
+no single obvious "next arc" the way the GUI arc was; what remains:
 
 - **Dynamic window creation** (spawning a NEW window/program instance
   from the running shell, rather than every window being a fixed,
@@ -548,10 +563,6 @@ flagged as a non-goal, none started:
   general N-window `raise_to_top()`/hit-test (Milestone 33 already
   generalized the shift logic, just not the fixed-slot array sizing) and
   some real "launch a program" shell command.
-- **A real clock app**, now that the pulse app has proven a persistent,
-  self-redrawing window works end to end — blocked only on a `sys_*`
-  wrapper for `kernel/drivers/rtc.c`'s existing (kernel-only) `rtc_read()`,
-  a small, well-scoped addition.
 - A real path-based `execve` remains blocked on the filesystem non-goal.
 
 A few smaller items outside that arc, not touching a non-goal:

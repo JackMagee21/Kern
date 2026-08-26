@@ -119,3 +119,8 @@ uint64_t sys_input_subscribe(void)
 {
     return syscall2(12, 0, 0);
 }
+
+void sys_rtc_read(rtc_time_t *out)
+{
+    syscall2(14, (uint64_t)(uintptr_t)out, 0);
+}

@@ -34,6 +34,7 @@ typedef struct __attribute__((packed)) {
 #define SYS_FB_PRESENT 11
 #define SYS_INPUT_SUBSCRIBE 12
 #define SYS_IPC_TRY_RECV 13
+#define SYS_RTC_READ 14
 
 /* Programs STAR/LSTAR/SFMASK and sets EFER.SCE. Must run after
    gdt_init() (STAR encodes GDT selector offsets) and tss_init().

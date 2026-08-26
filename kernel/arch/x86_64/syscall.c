@@ -6,6 +6,7 @@
 #include "msr.h"
 #include "../../drivers/console.h"
 #include "../../drivers/framebuffer.h"
+#include "../../drivers/rtc.h"
 #include "../../mm/vmm.h"
 #include "../../sched/scheduler.h"
 #include "../../sched/task.h"
@@ -470,6 +471,30 @@ uint32_t syscall_get_input_focus_pid(void)
     return input_focus_pid;
 }
 
+/* Milestone 35 (ADR 0035): rdi = pointer to write an rtc_time_t
+   (kernel/drivers/rtc.h) into, in the CALLER's OWN user memory,
+   validated the same way every other out-pointer syscall here already
+   is. rtc_read() (kernel/drivers/rtc.c) is pure CMOS port I/O -- `in`/
+   `out` are ring-0-only instructions this kernel never grants ring 3
+   an IOPL for (CLAUDE.md: MMIO/hardware regs only via explicit port
+   helpers, never opened up to userspace directly), so a syscall
+   wrapper is the only way a ring-3 clock app (kernel/user/clock_app.c)
+   can ever read real wall-clock time. Always succeeds (rtc_read()
+   itself has no failure mode -- it busy-waits out any in-progress
+   hardware update rather than ever returning an error) once the
+   pointer validates; returns 0. */
+static void sys_rtc_read(syscall_frame_t *frame)
+{
+    uint64_t out_ptr = frame->rdi;
+    if (!vmm_is_user_range(out_ptr, sizeof(rtc_time_t))) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    rtc_read((rtc_time_t *)(uintptr_t)out_ptr);
+    frame->rax = 0;
+}
+
 void syscall_dispatch(syscall_frame_t *frame)
 {
     syscall_count++;
@@ -516,6 +541,9 @@ void syscall_dispatch(syscall_frame_t *frame)
         break;
     case SYS_IPC_TRY_RECV:
         sys_ipc_try_recv(frame);
+        break;
+    case SYS_RTC_READ:
+        sys_rtc_read(frame);
         break;
     default:
         frame->rax = (uint64_t)-1;
