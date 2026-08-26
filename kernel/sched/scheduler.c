@@ -187,6 +187,12 @@ void scheduler_record_switch_diag(uint32_t task_id, const trap_frame_t *frame)
 
 void scheduler_dump_switch_diag(void)
 {
+    /* Milestone 37 (ADR 0037): deliberately KEPT on console_write
+       (dual-output), not moved to console_log -- this only ever runs
+       right before a real #GP panic (exceptions.c), so it's part of
+       the same "genuine unrecoverable failure must stay visible on
+       real hardware with no serial cable" case panic.c/exceptions.c's
+       own dumps are, not routine chatter. */
     console_write("[DIAG] last ");
     console_write_hex(SWITCH_DIAG_CAPACITY);
     console_write(" task switches (oldest first):\n");
@@ -280,9 +286,15 @@ static void reaper_task(void)
 
         vmm_destroy_address_space(dead->pml4);
         task_free_kernel_stack(dead->kernel_stack_base, dead->kernel_stack_top - dead->kernel_stack_base);
-        console_write("[OK] process ");
-        console_write_hex(dead->id);
-        console_write(" exited and was reaped\n");
+        /* Milestone 37 (ADR 0037): serial-only -- a real desktop
+           session can reap plenty of these over time (every closed
+           window's client, ADR 0034), and this line has no reason to
+           scroll across a screen someone's actually looking at.
+           Every existing smoke test still greps this from serial,
+           unaffected. */
+        console_log("[OK] process ");
+        console_log_hex(dead->id);
+        console_log(" exited and was reaped\n");
         reaped_count++;
 
         if (dead->parent_id == 0) {

@@ -29,3 +29,13 @@ void console_clear(void)
     serial_write("\x1b[2J\x1b[H");
     fbconsole_clear();
 }
+
+void console_log(const char *s)
+{
+    serial_write(s);
+}
+
+void console_log_hex(uint64_t value)
+{
+    serial_write_hex(value);
+}

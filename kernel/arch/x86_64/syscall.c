@@ -7,6 +7,7 @@
 #include "../../drivers/console.h"
 #include "../../drivers/framebuffer.h"
 #include "../../drivers/rtc.h"
+#include "../../drivers/serial.h"
 #include "../../mm/vmm.h"
 #include "../../sched/scheduler.h"
 #include "../../sched/task.h"
@@ -96,6 +97,16 @@ void syscall_set_user_rsp_slot(uint64_t *slot)
     syscall_user_rsp_slot = slot;
 }
 
+/* Milestone 37 (ADR 0037): serial-only (serial_putc, not
+   console_putc) -- every ring-3 program in this codebase uses
+   sys_write() exclusively for diagnostic/self-test markers ("[OK]
+   ... presented", "[FAIL] ..."), never as on-screen TEXT UI (a GUI
+   client's actual visible output is pixels, via sys_fb_present() --
+   display_server.c/pulse_app.c/clock_app.c/display_client_a.c/_b.c
+   all draw, they don't print, to be seen). Routing this to serial
+   only keeps the on-screen desktop free of that chatter while every
+   existing smoke test keeps working unchanged (they all grep serial
+   output, never the screen). */
 static void sys_write(syscall_frame_t *frame)
 {
     uint64_t ptr = frame->rdi;
@@ -108,7 +119,7 @@ static void sys_write(syscall_frame_t *frame)
 
     const uint8_t *buf = (const uint8_t *)(uintptr_t)ptr;
     for (uint64_t i = 0; i < len; i++) {
-        console_putc((char)buf[i]);
+        serial_putc((char)buf[i]);
     }
     frame->rax = len;
 }

@@ -49,9 +49,9 @@ static uint64_t read_cr2(void)
 
 static void dump_field(const char *label, uint64_t value)
 {
-    console_write(label);
-    console_write_hex(value);
-    console_write("\n");
+    console_log(label);
+    console_log_hex(value);
+    console_log("\n");
 }
 
 /* CLAUDE.md safety rule 6: on unrecoverable error, print full state to
@@ -70,7 +70,24 @@ static void dump_field(const char *label, uint64_t value)
    boot to service timer IRQs. Returns the frame to resume
    (common_stub.inc loads this into RSP before iretq); always the same
    frame it was given -- exceptions never trigger a Milestone 6 task
-   switch, only irq_handler's timer path does. */
+   switch, only irq_handler's timer path does.
+
+   Milestone 37 (ADR 0037): the full field-by-field dump below now goes
+   to console_log (serial-only), including for #BP -- that self-test is
+   an EXPECTED, RESUMED success, not a failure, so it has no more
+   business filling the on-screen desktop with a 20-line register dump
+   than any other routine diagnostic does (this was already true before
+   this milestone, just invisible under ~100 other boot lines that
+   scrolled past it). A genuine unrecoverable exception (anything that
+   actually reaches the closing `for(;;) hlt` below) still prints a
+   SHORT, dual-output (console_write) summary right before halting --
+   the full field-by-field detail is one grep away in the serial log,
+   but a person watching a real screen with no serial cable attached
+   still deserves to know the machine died, not just watch it go
+   silent -- CLAUDE.md's "never fail silently" applied to the on-screen
+   experience specifically, the same reasoning console.h's own doc
+   comment already gives for keeping this path on console_write at
+   all. */
 trap_frame_t *isr_handler(trap_frame_t *frame)
 {
     /* Milestone 21 (ADR 0021): a write fault on a copy-on-write page
@@ -96,12 +113,12 @@ trap_frame_t *isr_handler(trap_frame_t *frame)
         }
     }
 
-    console_write("\n[PANIC] exception: ");
-    console_write(exception_names[frame->vector]);
-    console_write("\n");
+    console_log("\n[PANIC] exception: ");
+    console_log(exception_names[frame->vector]);
+    console_log("\n");
 
     if (frame->vector == 13) {
-        scheduler_dump_switch_diag(); /* Milestone 32, ADR 0032, see scheduler.h */
+        scheduler_dump_switch_diag(); /* Milestone 32, ADR 0032, see scheduler.h -- deliberately still console_write, see that function's own comment */
     }
 
     dump_field("  vector:      0x", frame->vector);
@@ -118,17 +135,17 @@ trap_frame_t *isr_handler(trap_frame_t *frame)
            reason every other field here is already spelled out:
            CLAUDE.md safety rule 6, full state, not a puzzle to solve
            after the fact. */
-        console_write("  pf reason:   ");
-        console_write((frame->error_code & (1u << 0)) ? "protection-violation" : "not-present");
-        console_write((frame->error_code & (1u << 1)) ? ", write" : ", read");
-        console_write((frame->error_code & (1u << 2)) ? ", user-mode" : ", supervisor-mode");
+        console_log("  pf reason:   ");
+        console_log((frame->error_code & (1u << 0)) ? "protection-violation" : "not-present");
+        console_log((frame->error_code & (1u << 1)) ? ", write" : ", read");
+        console_log((frame->error_code & (1u << 2)) ? ", user-mode" : ", supervisor-mode");
         if (frame->error_code & (1u << 3)) {
-            console_write(", reserved-bit-violation");
+            console_log(", reserved-bit-violation");
         }
         if (frame->error_code & (1u << 4)) {
-            console_write(", instruction-fetch");
+            console_log(", instruction-fetch");
         }
-        console_write("\n");
+        console_log("\n");
     }
 
     dump_field("  rip:         0x", frame->rip);
@@ -158,6 +175,16 @@ trap_frame_t *isr_handler(trap_frame_t *frame)
         trap_frame_fixup_ss(frame); /* see trap_frame.h's own doc comment */
         return frame; /* resume exactly where interrupted; exceptions never trigger a task switch */
     }
+
+    /* Genuinely unrecoverable from here on -- the full field-by-field
+       detail above already went to serial (console_log); this short,
+       dual-output (console_write) line is the ONLY on-screen trace of
+       a real crash, deliberately brief so it doesn't try to be the
+       diagnostic itself, just an honest "the machine died" signal for
+       whoever's watching a real screen with no serial cable. */
+    console_write("\n[PANIC] ");
+    console_write(exception_names[frame->vector]);
+    console_write(" -- system halted, see serial log for full diagnostic detail\n");
 
     for (;;) {
         __asm__ volatile("cli; hlt");

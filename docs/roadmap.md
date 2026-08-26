@@ -1973,3 +1973,50 @@ This closes out `future.md`'s own concrete GUI-arc-adjacent candidates
 raised after Milestone 33. Remaining un-started work all requires
 explicit user go-ahead per CLAUDE.md's non-goals list (filesystem,
 ACPI power management, SMP, networking).
+
+## 37. Serial as the debug log, a clean on-screen desktop
+
+Direct user request: keep serial as a full debug log, but make the
+on-screen OS clean. Not part of the GUI arc or the filesystem work
+that follows it — a display/logging change touching how existing
+output is routed, not a new subsystem.
+
+**Deliverables:**
+- New `console_log`/`console_log_hex` (`kernel/drivers/console.c`/
+  `.h`) — serial-only, alongside the existing dual-output
+  `console_write`/`console_write_hex`.
+- The line drawn: genuine unrecoverable failures and the actual
+  interactive shell stay dual-output (visible on real hardware with no
+  serial cable); routine/expected/frequent chatter moves to
+  serial-only. `kernel.c`'s ~120 boot-diagnostic call sites, the
+  reaper's per-process line, and `input_router.c`'s per-click/drag
+  trace converted; `panic.c`, `shell.c`, and the flight-recorder dump
+  (`scheduler_dump_switch_diag()`) deliberately left untouched.
+- `sys_write` (`syscall.c`) switched from `console_putc` to
+  `serial_putc` directly — one change makes every ring-3 process's own
+  diagnostic markers serial-only, since none of them use it as
+  on-screen text (a GUI client's real visible output is pixels, via
+  `sys_fb_present()`).
+- A real refinement found during verification, not planned in advance:
+  the Milestone 2 `#BP` self-test's own full field-by-field dump was
+  still appearing on screen (an EXPECTED, RESUMED success, not a
+  failure). Moved to serial-only for every exception including `#BP`;
+  added a new, separate, short dual-output summary line printed only
+  immediately before a genuine unrecoverable halt.
+
+**Verification:** A real screendump after a quiet boot confirms the
+console region shows grey text only on the two rows the shell's own
+banner/prompt occupy (down from content spanning nearly the whole
+region). One real test regression found and fixed: an existing smoke
+test's serial-log assertion assumed the shell prompt and typed text
+would always be byte-adjacent in the log, which broke once
+`sys_write`'s changed performance profile shifted its interleaving
+against a concurrent process's own output — loosened to check for the
+typed text alone, still a valid proof, not a workaround. All
+thirty-one QEMU smoke tests and all four host suites re-verified
+passing.
+**Design record:** `docs/adr/0037-serial-debug-log-clean-desktop.md`.
+**Known limitations (accepted for this milestone only):** no boot
+splash — the screen is blank until the shell prompt/GUI appear; a real
+panic's on-screen summary is exception-name-only, full detail stays a
+`grep` away in serial.

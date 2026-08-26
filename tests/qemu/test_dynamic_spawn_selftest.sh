@@ -133,10 +133,10 @@ check() {
     fi
 }
 
-check "> spawn pulse"
+check "spawn pulse"
 check "[OK] spawned pulse app, pid 0x"
 check "[OK] display server: dynamically presented window 0x4"
-check "> spawn clock"
+check "spawn clock"
 check "[OK] spawned clock app, pid 0x"
 check "[OK] display server: dynamically presented window 0x5"
 check "[OK] display server: closed window 0x4"

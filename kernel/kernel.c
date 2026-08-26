@@ -158,19 +158,19 @@ static bool pci_found_host_bridge;
 static void pci_report_device(const pci_device_t *dev, void *ctx)
 {
     (void)ctx;
-    console_write("[PCI] bus 0x");
-    console_write_hex(dev->bus);
-    console_write(" dev 0x");
-    console_write_hex(dev->device);
-    console_write(" fn 0x");
-    console_write_hex(dev->function);
-    console_write(": vendor 0x");
-    console_write_hex(dev->vendor_id);
-    console_write(" device 0x");
-    console_write_hex(dev->device_id);
-    console_write(" class 0x");
-    console_write_hex(dev->class_code);
-    console_write("\n");
+    console_log("[PCI] bus 0x");
+    console_log_hex(dev->bus);
+    console_log(" dev 0x");
+    console_log_hex(dev->device);
+    console_log(" fn 0x");
+    console_log_hex(dev->function);
+    console_log(": vendor 0x");
+    console_log_hex(dev->vendor_id);
+    console_log(" device 0x");
+    console_log_hex(dev->device_id);
+    console_log(" class 0x");
+    console_log_hex(dev->class_code);
+    console_log("\n");
 
     /* Every QEMU i440fx-based machine (the default "-M pc") has an
        Intel (vendor 0x8086) host bridge at bus 0, device 0, function 0
@@ -191,7 +191,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        be set up once vmm_phys_to_virt() is usable (Milestone 19's
        direct-map, itself only available after pmm_init() runs, well
        below) -- unlike Milestone 8's old vga_init(), which ran here at
-       time zero. Every console_write() call between here and that point
+       time zero. Every console_log() call between here and that point
        still reaches serial (console.c's fan-out), just not the screen
        yet -- a deliberate, documented tradeoff, not a lost message; see
        ADR 0023's Known limitations. */
@@ -200,11 +200,11 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
         panic("invalid multiboot2 magic");
     }
 
-    console_write("[OK] hello kernel\n");
+    console_log("[OK] hello kernel\n");
 
     gdt_init();
     idt_init();
-    console_write("[OK] gdt/idt installed\n");
+    console_log("[OK] gdt/idt installed\n");
 
     /* Milestone 11 (ADR 0011): must run before any VMM_FLAG_NX mapping
        is created (heap_init() below, and every task_create_user()
@@ -212,14 +212,14 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        NX rather than letting a later mapping fault with a confusing
        reserved-bit #PF instead. */
     vmm_enable_nx();
-    console_write("[OK] NX (no-execute) enabled\n");
+    console_log("[OK] NX (no-execute) enabled\n");
 
     pmm_init(mbi_addr);
-    console_write("[OK] pmm initialized, free frames: 0x");
-    console_write_hex(pmm_frames_free());
-    console_write(" / total: 0x");
-    console_write_hex(pmm_frames_total());
-    console_write("\n");
+    console_log("[OK] pmm initialized, free frames: 0x");
+    console_log_hex(pmm_frames_free());
+    console_log(" / total: 0x");
+    console_log_hex(pmm_frames_total());
+    console_log("\n");
 
     /* Milestone 3 self-test: allocate two distinct frames, free one,
        and confirm the next allocation reuses exactly that frame --
@@ -235,7 +235,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (frame_c != frame_a) {
         panic("pmm self-test failed: freed frame not reused");
     }
-    console_write("[OK] pmm self-test passed (alloc/free/reuse)\n");
+    console_log("[OK] pmm self-test passed (alloc/free/reuse)\n");
 
     /* Milestone 19 (ADR 0019): must run before the first
        vmm_create_address_space() call (before heap_init() is fine --
@@ -245,7 +245,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        when copied by reference into every future process's table
        (ADR 0009). */
     vmm_direct_map_init();
-    console_write("[OK] physical memory direct-map initialized\n");
+    console_log("[OK] physical memory direct-map initialized\n");
 
     /* Self-test: write a known pattern to a fresh frame through
        vmm_phys_to_virt(), then read it back through a COMPLETELY
@@ -273,7 +273,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
         }
     }
     pmm_free_frame(direct_map_test_frame);
-    console_write("[OK] direct-map self-test passed (write via vmm_phys_to_virt visible via the low identity mapping)\n");
+    console_log("[OK] direct-map self-test passed (write via vmm_phys_to_virt visible via the low identity mapping)\n");
 
     /* Milestone 23 (ADR 0023): the graphics framebuffer console. Must
        run here, not earlier -- fb_init() needs vmm_phys_to_virt() (just
@@ -288,15 +288,15 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        (below) is what makes it actually move. */
     fb_init(mbi_addr);
     fbconsole_init();
-    console_write("[OK] graphics framebuffer console initialized, 0x");
-    console_write_hex(fb_get_width());
-    console_write(" x 0x");
-    console_write_hex(fb_get_height());
-    console_write("\n");
+    console_log("[OK] graphics framebuffer console initialized, 0x");
+    console_log_hex(fb_get_width());
+    console_log(" x 0x");
+    console_log_hex(fb_get_height());
+    console_log("\n");
     cursor_init();
 
     heap_init();
-    console_write("[OK] kernel heap initialized\n");
+    console_log("[OK] kernel heap initialized\n");
 
     /* Milestone 4 self-test: allocate two distinct blocks, write and
        read back distinct fill patterns (catches overlap bugs the
@@ -330,7 +330,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (heap_c != heap_a) {
         panic("heap self-test failed: freed block not reused");
     }
-    console_write("[OK] heap self-test passed (alloc/write/verify/free/reuse)\n");
+    console_log("[OK] heap self-test passed (alloc/write/verify/free/reuse)\n");
 
     /* Milestone 11 (ADR 0011) self-test: confirm heap_init()'s
        VMM_FLAG_NX mapping actually produced a non-executable PTE, and
@@ -345,7 +345,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (!vmm_page_is_executable_in(vmm_current_pml4(), (uint64_t)(uintptr_t)kernel_main)) {
         panic("NX self-test failed: ordinary kernel code reported non-executable");
     }
-    console_write("[OK] NX self-test passed (heap is non-executable, kernel code still is)\n");
+    console_log("[OK] NX self-test passed (heap is non-executable, kernel code still is)\n");
 
     /* Milestone 2 self-test: deliberately take a #BP fault and check its
        dump reports the right vector -- exceptions.c's isr_handler
@@ -362,9 +362,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (pci_device_count == 0 || !pci_found_host_bridge) {
         panic("pci self-test failed: no devices found or host bridge missing");
     }
-    console_write("[OK] pci self-test passed (0x");
-    console_write_hex(pci_device_count);
-    console_write(" device(s) found, host bridge present)\n");
+    console_log("[OK] pci self-test passed (0x");
+    console_log_hex(pci_device_count);
+    console_log(" device(s) found, host bridge present)\n");
 
     /* Milestone 14 (ADR 0014): can't check against a known expected
        wall-clock value (there isn't one -- this runs whenever it runs),
@@ -381,19 +381,19 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
         || boot_time.year < 2020 || boot_time.year > 2100) {
         panic("rtc self-test failed: decoded time field out of sane range");
     }
-    console_write("[OK] rtc self-test passed, boot time (fields in hex, same as every other\n     field in this log): year 0x");
-    console_write_hex(boot_time.year);
-    console_write(" month 0x");
-    console_write_hex(boot_time.month);
-    console_write(" day 0x");
-    console_write_hex(boot_time.day);
-    console_write(" hour 0x");
-    console_write_hex(boot_time.hour);
-    console_write(" min 0x");
-    console_write_hex(boot_time.minute);
-    console_write(" sec 0x");
-    console_write_hex(boot_time.second);
-    console_write("\n");
+    console_log("[OK] rtc self-test passed, boot time (fields in hex, same as every other\n     field in this log): year 0x");
+    console_log_hex(boot_time.year);
+    console_log(" month 0x");
+    console_log_hex(boot_time.month);
+    console_log(" day 0x");
+    console_log_hex(boot_time.day);
+    console_log(" hour 0x");
+    console_log_hex(boot_time.hour);
+    console_log(" min 0x");
+    console_log_hex(boot_time.minute);
+    console_log(" sec 0x");
+    console_log_hex(boot_time.second);
+    console_log("\n");
 
     pic_remap();
     pit_init(TIMER_FREQUENCY_HZ);
@@ -405,7 +405,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        descriptor slot and the GDT selector layout STAR depends on). */
     tss_init();
     syscall_init();
-    console_write("[OK] tss/syscall initialized\n");
+    console_log("[OK] tss/syscall initialized\n");
 
     /* Milestone 6: scheduler owns IRQ0 now (it calls pit_tick() itself
        -- see kernel/sched/scheduler.c), so it must be wired up before
@@ -439,7 +439,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (vmm_translate(guard_page, &unused_phys)) {
         panic("guard page self-test failed: kernel stack's guard page is mapped");
     }
-    console_write("[OK] guard page self-test passed (kernel stack guard page is unmapped)\n");
+    console_log("[OK] guard page self-test passed (kernel stack guard page is unmapped)\n");
 
     /* Milestone 27 (ADR 0027) / Milestone 30 (ADR 0030): the display
        server, created HERE -- before the frame-leak baseline just
@@ -468,9 +468,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     task_t *display_server_process = task_create_user_image(display_server_image_start, display_server_image_end);
     scheduler_add_task(display_server_process);
     shell_set_display_server_pid(display_server_process->id); /* Milestone 36 (ADR 0036): so the shell's own `spawn` command can bootstrap a dynamically-launched client */
-    console_write("[OK] display server process created, pid 0x");
-    console_write_hex(display_server_process->id);
-    console_write(" (persistent -- serves its four clients below, then waits forever for input, plus any later `spawn`ed ones)\n");
+    console_log("[OK] display server process created, pid 0x");
+    console_log_hex(display_server_process->id);
+    console_log(" (persistent -- serves its four clients below, then waits forever for input, plus any later `spawn`ed ones)\n");
 
     /* Milestone 33 (ADR 0033): the pulse app -- created HERE too, in
        this same "permanent process" zone, before the frame-leak
@@ -484,9 +484,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        only starts once preemption begins, same as the server. */
     task_t *pulse_app_process = task_create_user_image(pulse_app_image_start, pulse_app_image_end);
     scheduler_add_task(pulse_app_process);
-    console_write("[OK] pulse app process created, pid 0x");
-    console_write_hex(pulse_app_process->id);
-    console_write(" (persistent -- animates its own window forever once it joins the server)\n");
+    console_log("[OK] pulse app process created, pid 0x");
+    console_log_hex(pulse_app_process->id);
+    console_log(" (persistent -- animates its own window forever once it joins the server)\n");
 
     /* Milestone 35 (ADR 0035): the clock app -- same "permanent
        process" zone, same reason as the display server and pulse app
@@ -494,9 +494,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        boot either (it keeps ticking forever). */
     task_t *clock_app_process = task_create_user_image(clock_app_image_start, clock_app_image_end);
     scheduler_add_task(clock_app_process);
-    console_write("[OK] clock app process created, pid 0x");
-    console_write_hex(clock_app_process->id);
-    console_write(" (persistent -- ticks its own window forever once it joins the server)\n");
+    console_log("[OK] clock app process created, pid 0x");
+    console_log_hex(clock_app_process->id);
+    console_log(" (persistent -- ticks its own window forever once it joins the server)\n");
 
     /* Milestone 10 (ADR 0010) self-test setup: captured BEFORE either
        process exists, so that once both have exited and been fully
@@ -515,12 +515,12 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     task_t *process_b = task_create_user();
     scheduler_add_task(process_a);
     scheduler_add_task(process_b);
-    console_write("[OK] scheduler initialized, 2 kernel + 2 ring-3 processes created\n");
-    console_write("[OK] process A pml4: 0x");
-    console_write_hex(process_a->pml4);
-    console_write(", process B pml4: 0x");
-    console_write_hex(process_b->pml4);
-    console_write(" (different address spaces)\n");
+    console_log("[OK] scheduler initialized, 2 kernel + 2 ring-3 processes created\n");
+    console_log("[OK] process A pml4: 0x");
+    console_log_hex(process_a->pml4);
+    console_log(", process B pml4: 0x");
+    console_log_hex(process_b->pml4);
+    console_log(" (different address spaces)\n");
 
     /* Milestone 18 (ADR 0018): a THIRD orphan process (parent_id == 0,
        same as process_a/process_b -- kernel_main itself never
@@ -532,9 +532,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        into it. */
     task_t *fork_demo_process = task_create_user_image(fork_demo_image_start, fork_demo_image_end);
     scheduler_add_task(fork_demo_process);
-    console_write("[OK] fork/wait demo process created, pid 0x");
-    console_write_hex(fork_demo_process->id);
-    console_write("\n");
+    console_log("[OK] fork/wait demo process created, pid 0x");
+    console_log_hex(fork_demo_process->id);
+    console_log("\n");
 
     /* Milestone 22 (ADR 0022): a FIFTH orphan process whose own job is
        to sys_exec into a completely different embedded image at
@@ -545,9 +545,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        (raised from 4 to 5, not 6). */
     task_t *exec_demo_process = task_create_user_image(exec_demo_image_start, exec_demo_image_end);
     scheduler_add_task(exec_demo_process);
-    console_write("[OK] exec demo process created, pid 0x");
-    console_write_hex(exec_demo_process->id);
-    console_write("\n");
+    console_log("[OK] exec demo process created, pid 0x");
+    console_log_hex(exec_demo_process->id);
+    console_log("\n");
 
     /* Milestone 26 (ADR 0026): a SIXTH and SEVENTH orphan process,
        proving IPC message-passing and shared memory work together,
@@ -583,11 +583,11 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (!ipc_send(ipc_sender_process, &ipc_boot_msg)) {
         panic("kernel_main: failed to inject the ipc demo's own bootstrap message (inbox somehow already full)");
     }
-    console_write("[OK] ipc/shm demo processes created, sender pid 0x");
-    console_write_hex(ipc_sender_process->id);
-    console_write(", receiver pid 0x");
-    console_write_hex(ipc_receiver_process->id);
-    console_write("\n");
+    console_log("[OK] ipc/shm demo processes created, sender pid 0x");
+    console_log_hex(ipc_sender_process->id);
+    console_log(", receiver pid 0x");
+    console_log_hex(ipc_receiver_process->id);
+    console_log("\n");
 
     /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028) / Milestone 30
        (ADR 0030): a NINTH and TENTH orphan process -- Desktop.md's
@@ -628,17 +628,17 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (!ipc_send(clock_app_process, &clock_app_boot_msg)) {
         panic("kernel_main: failed to inject the clock app's own bootstrap message (inbox somehow already full)");
     }
-    console_write("[OK] display server/client processes created, server pid 0x");
-    console_write_hex(display_server_process->id);
-    console_write(", client A pid 0x");
-    console_write_hex(display_client_a_process->id);
-    console_write(", client B pid 0x");
-    console_write_hex(display_client_b_process->id);
-    console_write(", pulse app pid 0x");
-    console_write_hex(pulse_app_process->id);
-    console_write(", clock app pid 0x");
-    console_write_hex(clock_app_process->id);
-    console_write("\n");
+    console_log("[OK] display server/client processes created, server pid 0x");
+    console_log_hex(display_server_process->id);
+    console_log(", client A pid 0x");
+    console_log_hex(display_client_a_process->id);
+    console_log(", client B pid 0x");
+    console_log_hex(display_client_b_process->id);
+    console_log(", pulse app pid 0x");
+    console_log_hex(pulse_app_process->id);
+    console_log(", clock app pid 0x");
+    console_log_hex(clock_app_process->id);
+    console_log("\n");
 
     keyboard_init();
     mouse_init();
@@ -649,7 +649,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
                             at all, regardless of IRQ12's own mask bit (ADR 0016). */
     pic_clear_mask(12); /* IRQ12: mouse */
     __asm__ volatile("sti");
-    console_write("[OK] pic/pit/keyboard/mouse initialized, IRQ0+IRQ1+IRQ2+IRQ12 unmasked\n");
+    console_log("[OK] pic/pit/keyboard/mouse initialized, IRQ0+IRQ1+IRQ2+IRQ12 unmasked\n");
 
     /* Milestone 25 (ADR 0025) self-test: the round-robin only starts
        actually preempting tasks once interrupts are enabled (just
@@ -664,13 +664,13 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (block_test_woke_up) {
         panic("blocking/wake self-test failed: blocker resumed before scheduler_wake() was ever called (never actually blocked)");
     }
-    console_write("[OK] blocking/wake self-test: task genuinely blocked, confirmed not yet woken\n");
+    console_log("[OK] blocking/wake self-test: task genuinely blocked, confirmed not yet woken\n");
     block_test_observed_still_blocked = true; /* release block_test_waker to actually call scheduler_wake() now */
 
     while (!block_test_woke_up) {
         __asm__ volatile("hlt");
     }
-    console_write("[OK] blocking/wake self-test passed, task correctly resumed after scheduler_wake()\n");
+    console_log("[OK] blocking/wake self-test passed, task correctly resumed after scheduler_wake()\n");
 
     /* Milestone 5 self-test: wait for real IRQ0 ticks to accumulate
        instead of just checking pit_init() didn't crash -- proves the
@@ -679,9 +679,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     while (pit_get_ticks() < TIMER_SELFTEST_TARGET_TICKS) {
         __asm__ volatile("hlt");
     }
-    console_write("[OK] timer self-test passed (");
-    console_write_hex(pit_get_ticks());
-    console_write(" ticks received via IRQ0)\n");
+    console_log("[OK] timer self-test passed (");
+    console_log_hex(pit_get_ticks());
+    console_log(" ticks received via IRQ0)\n");
 
     /* Milestone 6 self-test: by now ~1 real second (100 ticks) has
        elapsed. If preemption weren't actually forcing the CPU away from
@@ -694,11 +694,11 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (demo_task_a_ticks == 0 || demo_task_b_ticks == 0) {
         panic("scheduler self-test failed: a demo task never got scheduled");
     }
-    console_write("[OK] scheduler self-test passed, task A: 0x");
-    console_write_hex(demo_task_a_ticks);
-    console_write(", task B: 0x");
-    console_write_hex(demo_task_b_ticks);
-    console_write(" (both made progress under preemption)\n");
+    console_log("[OK] scheduler self-test passed, task A: 0x");
+    console_log_hex(demo_task_a_ticks);
+    console_log(", task B: 0x");
+    console_log_hex(demo_task_b_ticks);
+    console_log(" (both made progress under preemption)\n");
 
     /* Milestone 7/9 self-test: by now both ring-3 processes should have
        made their one-shot sys_write calls (proving the validated-
@@ -712,9 +712,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (syscall_get_count() <= 1) {
         panic("syscall self-test failed: ring-3 processes' syscalls did not land repeatedly");
     }
-    console_write("[OK] syscall self-test passed, ");
-    console_write_hex(syscall_get_count());
-    console_write(" syscalls serviced from 2 ring-3 processes\n");
+    console_log("[OK] syscall self-test passed, ");
+    console_log_hex(syscall_get_count());
+    console_log(" syscalls serviced from 2 ring-3 processes\n");
 
     /* Milestone 10 (ADR 0010) self-test: both processes' loaded program
        (kernel/user/hello.asm, Milestone 17) runs a BOUNDED sys_nop loop
@@ -806,9 +806,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (frames_after_reap != expected_frames_after_reap) {
         panic("process lifecycle self-test failed: frames leaked after all processes exited");
     }
-    console_write("[OK] process lifecycle self-test passed, all ring-3 processes exited and were fully reaped (0x");
-    console_write_hex(frames_after_reap);
-    console_write(" frames free, matches pre-creation baseline minus the display server/pulse app/clock app's own permanently-held canvas buffers)\n");
+    console_log("[OK] process lifecycle self-test passed, all ring-3 processes exited and were fully reaped (0x");
+    console_log_hex(frames_after_reap);
+    console_log(" frames free, matches pre-creation baseline minus the display server/pulse app/clock app's own permanently-held canvas buffers)\n");
 
     /* Milestone 20 (ADR 0020): proves sys_wait REALLY blocked at least
        once, not just that it eventually returned the right answer --
@@ -819,9 +819,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (syscall_get_wait_block_count() == 0) {
         panic("blocking wait self-test failed: sys_wait never actually blocked");
     }
-    console_write("[OK] blocking wait self-test passed, sys_wait genuinely blocked (0x");
-    console_write_hex(syscall_get_wait_block_count());
-    console_write(" turns) before the fork demo's child exited\n");
+    console_log("[OK] blocking wait self-test passed, sys_wait genuinely blocked (0x");
+    console_log_hex(syscall_get_wait_block_count());
+    console_log(" turns) before the fork demo's child exited\n");
 
     /* Milestone 21 (ADR 0021): proves fork's page sharing is genuinely
        lazy/fault-driven, not just correct -- a zero count here would
@@ -835,9 +835,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (vmm_get_cow_fault_count() == 0) {
         panic("copy-on-write self-test failed: no COW fault was ever resolved");
     }
-    console_write("[OK] copy-on-write self-test passed, ");
-    console_write_hex(vmm_get_cow_fault_count());
-    console_write(" page(s) copied lazily on first write, not eagerly at fork time\n");
+    console_log("[OK] copy-on-write self-test passed, ");
+    console_log_hex(vmm_get_cow_fault_count());
+    console_log(" page(s) copied lazily on first write, not eagerly at fork time\n");
 
     /* Milestone 22 (ADR 0022): proves sys_exec genuinely resolved into a
        real image swap at least once this boot, not just that the
@@ -849,9 +849,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (syscall_get_exec_count() == 0) {
         panic("exec self-test failed: sys_exec never actually replaced a process image");
     }
-    console_write("[OK] exec self-test passed, sys_exec replaced a running process's image 0x");
-    console_write_hex(syscall_get_exec_count());
-    console_write(" time(s) without creating a new process\n");
+    console_log("[OK] exec self-test passed, sys_exec replaced a running process's image 0x");
+    console_log_hex(syscall_get_exec_count());
+    console_log(" time(s) without creating a new process\n");
 
     /* Milestone 26 (ADR 0026): proves sys_ipc_recv genuinely blocked at
        least once this boot -- the ipc demo's receiver process's own
@@ -867,9 +867,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (syscall_get_ipc_recv_block_count() == 0) {
         panic("ipc self-test failed: sys_ipc_recv never actually blocked");
     }
-    console_write("[OK] ipc self-test passed, sys_ipc_recv genuinely blocked (0x");
-    console_write_hex(syscall_get_ipc_recv_block_count());
-    console_write(" turns) before the sender's message arrived\n");
+    console_log("[OK] ipc self-test passed, sys_ipc_recv genuinely blocked (0x");
+    console_log_hex(syscall_get_ipc_recv_block_count());
+    console_log(" turns) before the sender's message arrived\n");
 
     /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028) / Milestone 31
        (ADR 0031) / Milestone 33 (ADR 0033) / Milestone 35 (ADR 0035):
@@ -903,9 +903,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (syscall_get_fb_present_count() < 8) {
         panic("display server self-test failed: sys_fb_present blitted fewer than 8 frames (some window's chrome or canvas landed silently, or too few)");
     }
-    console_write("[OK] display server self-test passed, sys_fb_present blitted 0x");
-    console_write_hex(syscall_get_fb_present_count());
-    console_write(" frame(s) onto the real framebuffer\n");
+    console_log("[OK] display server self-test passed, sys_fb_present blitted 0x");
+    console_log_hex(syscall_get_fb_present_count());
+    console_log(" frame(s) onto the real framebuffer\n");
 
     /* Steady state: an interactive shell instead of a bare idle loop --
        this is what actually makes the kernel usable sitting at real

@@ -17,16 +17,23 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 36 (2026-08-26)
+## State as of Milestone 37 (2026-08-26)
 
 **GUI arc COMPLETE** — see `Desktop.md` for the full multi-milestone
-plan (multi-window desktop, filesystem staying a non-goal, confirmed
-with the user). Milestones 24-31 and 33 (below) are all seven of
-Desktop.md's own numbered items; Milestones 32, 34, 35, and 36 are real
-follow-on work outside the arc's own numbering (all see their own
-entries below and `docs/roadmap.md`). Milestone 36 closes out every
-concrete GUI-arc-adjacent candidate this file's own "Reasonable next
-steps" section had raised.
+plan (multi-window desktop; filesystem was a non-goal AT THE TIME that
+plan was made, later authorized separately — see below). Milestones
+24-31 and 33 (below) are all seven of Desktop.md's own numbered items;
+Milestones 32, 34, 35, and 36 are real follow-on work outside the
+arc's own numbering (all see their own entries below and
+`docs/roadmap.md`). Milestone 36 closes out every concrete
+GUI-arc-adjacent candidate this file's own "Reasonable next steps"
+section had raised. Milestone 37 is a display/logging change (serial
+as the full debug log, a clean on-screen desktop), not part of either
+the GUI arc or the filesystem arc that follows it.
+
+The user has since explicitly authorized the filesystem non-goal
+(2026-08-26: "go ahead with the filesystem work") — see "Explicitly
+flagged" below for the exact scope and current status.
 
 Milestone 32 also got a real follow-up fix this session: a genuine
 `#GP` under KVM while actually dragging a window, root-caused to the
@@ -472,6 +479,33 @@ the design reasoning and any real bugs found along the way.
     three-fact exit proof as Milestone 34), and confirming the other is
     unaffected. Clean under real KVM through the full sequence. See ADR
     0036.
+37. **Serial as the debug log, a clean on-screen desktop** — direct
+    user request, not part of the GUI arc or the filesystem arc that
+    follows it. New `console_log`/`console_log_hex`
+    (`kernel/drivers/console.c`/`.h`, serial-only) alongside the
+    existing dual-output `console_write`/`console_write_hex`. The line
+    drawn: genuine unrecoverable failures and the actual interactive
+    shell stay dual-output (still visible on real hardware with no
+    serial cable); routine/expected/frequent chatter (kernel_main's
+    ~120 boot markers, the reaper's per-process line, every input
+    click/drag trace, every ring-3 process's own `sys_write()`
+    diagnostics, routed through one shared syscall-handler change) moves
+    to serial-only. Found and fixed a real refinement during
+    verification, not planned in advance: the Milestone 2 `#BP`
+    self-test's own full register dump was still reaching the screen
+    (an expected, resumed success, not a failure) — moved to
+    serial-only for every exception, with a new short dual-output
+    summary line added only immediately before a genuine unrecoverable
+    halt. Also found and fixed a real test regression: an existing
+    smoke test's serial-log assertion assumed the shell prompt and
+    typed text would always be byte-adjacent, which broke once
+    `sys_write`'s changed performance profile shifted its interleaving
+    against a concurrent process's own output — loosened to a
+    still-valid, less brittle check. A real screendump after a quiet
+    boot confirms the console region now shows text only on the two
+    rows the shell's own banner/prompt occupy. All thirty-one QEMU
+    smoke tests and all four host suites re-verified passing. See ADR
+    0037.
 
 **Testing state:** 31 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
@@ -481,11 +515,19 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** thirty milestones
-(9-36) all followed the same pattern — implement, boot in QEMU for
-real, fix what actually breaks, write the ADR describing what was
-tried and what was learned (including dead ends), commit in small
-logical pieces. Milestone 36's own dynamic-spawn MECHANISM worked
+**A note on process discipline that held up well:** thirty-one
+milestones (9-37) all followed the same pattern — implement, boot in
+QEMU for real, fix what actually breaks, write the ADR describing what
+was tried and what was learned (including dead ends), commit in small
+logical pieces. Milestone 37's own verification pass is its own kind
+of story worth naming: neither of its two real findings (the `#BP`
+self-test's dump still reaching the screen, and a test's own
+byte-adjacency assumption breaking) was a kernel correctness bug —
+both were caught by actually LOOKING at the result (a real screendump,
+a real failing test) rather than assuming the mechanical rename was
+sufficient, then reasoned through to root cause before deciding what
+needed fixing (the on-screen behavior in the first case, the test's
+own assertion in the second). Milestone 36's own dynamic-spawn MECHANISM worked
 correctly the first time it booted — what took real diagnosis was a
 QEMU `-display none`/`screendump` staleness artifact discovered while
 verifying an overlapping window placement, root-caused (not guessed
@@ -563,23 +605,26 @@ row's byte count before ever embedding it, not by a garbled on-screen
 character -- CLAUDE.md's "verify against a real source, don't guess"
 discipline applied to a cosmetic-only concern for the first time.
 
-## Explicitly flagged, NOT started — needs your decision
+## Explicitly flagged — status of each
 
 `CLAUDE.md`'s non-goals list requires flagging these before any work
-begins, so none of the following has been touched:
+begins:
 
-- **A disk driver + real filesystem.** Milestone 13's PCI scan found a
-  real PIIX3 IDE controller in QEMU's default machine, so the hardware
-  path is there whenever this is wanted. "Real FS" is an explicit
-  CLAUDE.md non-goal.
+- **A disk driver + real filesystem.** AUTHORIZED (2026-08-26, direct
+  user request: "go ahead with the filesystem work") — no longer
+  awaiting a decision, the arc is starting. Milestone 13's PCI scan
+  already found a real PIIX3 IDE controller in QEMU's default machine,
+  so the hardware path is there. See `docs/roadmap.md` for progress
+  once milestones land.
 - **ACPI-based shutdown** (as opposed to the reset-only `reboot`
   Milestone 15 already built). Needs ACPI table parsing, which is a
-  listed non-goal ("ACPI power mgmt").
-- **SMP.** Explicit non-goal.
-- **Networking / USB.** Explicit non-goals.
+  listed non-goal ("ACPI power mgmt"). NOT authorized.
+- **SMP.** Explicit non-goal. NOT authorized.
+- **Networking / USB.** Explicit non-goals. NOT authorized.
 
-If you want to proceed on any of these, say so explicitly — that's the
-signal CLAUDE.md asks for before this territory gets touched.
+If you want to proceed on any of the still-not-authorized ones, say so
+explicitly — that's the signal CLAUDE.md asks for before that
+territory gets touched.
 
 ## Reasonable next steps (not flagged, not started)
 

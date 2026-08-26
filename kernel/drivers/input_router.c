@@ -54,15 +54,23 @@ void input_router_notify(uint32_t event, uint32_t x, uint32_t y)
                             : (event == INPUT_EVENT_DRAG) ? "drag"
                             : (event == INPUT_EVENT_RELEASE) ? "release"
                             : "unknown";
-    console_write("[OK] input router: routed ");
-    console_write(event_name);
-    console_write(" to pid 0x");
-    console_write_hex(target_pid);
-    console_write(" at (0x");
-    console_write_hex(x);
-    console_write(", 0x");
-    console_write_hex(y);
-    console_write(")\n");
+    /* Milestone 37 (ADR 0037): serial-only (console_log, not
+       console_write) -- this fires on EVERY click/drag/release, so a
+       real drag interaction alone can print dozens of these; keeping
+       it on-screen would mean using the actual GUI generates a wall of
+       scrolling text over the console's reserved region while the
+       desktop is in normal use. Still reaches every existing smoke
+       test unchanged -- they all grep serial output, never the
+       screen. */
+    console_log("[OK] input router: routed ");
+    console_log(event_name);
+    console_log(" to pid 0x");
+    console_log_hex(target_pid);
+    console_log(" at (0x");
+    console_log_hex(x);
+    console_log(", 0x");
+    console_log_hex(y);
+    console_log(")\n");
 }
 
 uint64_t input_router_get_click_count(void)
