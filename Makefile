@@ -44,6 +44,7 @@ ISO_DIR := $(BUILD_DIR)/iso
 C_SOURCES := kernel/kernel.c kernel/panic.c kernel/shell.c kernel/drivers/serial.c kernel/drivers/framebuffer.c kernel/drivers/fbconsole.c \
              kernel/drivers/cursor.c kernel/drivers/console.c kernel/drivers/input_router.c \
              kernel/drivers/pic.c kernel/drivers/pit.c kernel/drivers/keyboard.c kernel/drivers/mouse.c kernel/drivers/pci.c kernel/drivers/rtc.c \
+             kernel/drivers/ata.c \
              libk/fmt.c libk/heap_alloc.c libk/ring_buffer.c libk/elf.c \
              kernel/arch/x86_64/gdt.c kernel/arch/x86_64/idt.c kernel/arch/x86_64/exceptions.c kernel/arch/x86_64/irq_dispatch.c \
              kernel/arch/x86_64/tss.c kernel/arch/x86_64/syscall.c kernel/arch/x86_64/reboot.c kernel/arch/x86_64/multiboot2.c \
@@ -211,6 +212,25 @@ $(OS_ISO): $(KERNEL_ELF) boot/grub.cfg check-mb2
 	cp boot/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
 	$(GRUB_MKRESCUE) -o $@ $(ISO_DIR)
 
+# Milestone 38 (ADR 0038): a plain raw scratch disk for
+# kernel/drivers/ata.c's own PIO driver -- 16MiB, zero-filled (`dd
+# if=/dev/zero`, not qemu-img, which isn't installed on this machine;
+# a raw zero-filled file needs no special tooling at all, unlike
+# qcow2). Only ever (re)created if missing -- NOT a `.PHONY` target,
+# so a real, already-tested driver's own prior writes to it persist
+# across ordinary rebuilds; delete it manually if a genuinely fresh
+# disk is ever wanted. Attached explicitly at `ide.0,unit=1` (primary
+# slave) in both `run`/`debug` below and the driver's own dedicated
+# smoke test -- deliberately never the same slot `-cdrom`'s own
+# shorthand uses (secondary master, QEMU's long-standing convention),
+# so this never touches or risks the proven, working boot-media path.
+DISK_IMG := $(BUILD_DIR)/disk.img
+$(DISK_IMG):
+	@mkdir -p $(dir $@)
+	dd if=/dev/zero of=$@ bs=1M count=16 status=none
+
+DISK_FLAGS := -drive file=$(DISK_IMG),format=raw,if=none,id=ata_disk0 -device ide-hd,drive=ata_disk0,bus=ide.0,unit=1
+
 # WSLg confirmed working on this machine (DISPLAY/WAYLAND_DISPLAY set,
 # /tmp/.X11-unix/X0 present) and qemu-ui-gtk is installed, so `run`/
 # `debug` open a real GTK window showing the graphics framebuffer
@@ -266,11 +286,11 @@ $(OS_ISO): $(KERNEL_ELF) boot/grub.cfg check-mb2
 # turn on before that fix existed.
 KVM_FLAG := $(shell test -r /dev/kvm -a -w /dev/kvm && echo -enable-kvm)
 
-run: $(OS_ISO)
-	GDK_BACKEND=x11 $(QEMU) $(KVM_FLAG) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on
+run: $(OS_ISO) $(DISK_IMG)
+	GDK_BACKEND=x11 $(QEMU) $(KVM_FLAG) -cdrom $(OS_ISO) $(DISK_FLAGS) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on
 
-debug: $(OS_ISO)
-	GDK_BACKEND=x11 $(QEMU) $(KVM_FLAG) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on -s -S &
+debug: $(OS_ISO) $(DISK_IMG)
+	GDK_BACKEND=x11 $(QEMU) $(KVM_FLAG) -cdrom $(OS_ISO) $(DISK_FLAGS) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on -s -S &
 	$(GDB) $(KERNEL_ELF) -ex "target remote :1234"
 
 clean:

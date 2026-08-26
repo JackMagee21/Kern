@@ -17,7 +17,7 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 37 (2026-08-26)
+## State as of Milestone 38 (2026-08-26)
 
 **GUI arc COMPLETE** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop; filesystem was a non-goal AT THE TIME that
@@ -33,7 +33,8 @@ the GUI arc or the filesystem arc that follows it.
 
 The user has since explicitly authorized the filesystem non-goal
 (2026-08-26: "go ahead with the filesystem work") — see "Explicitly
-flagged" below for the exact scope and current status.
+flagged" below for the exact scope and current status. Milestone 38
+(a real ATA PIO disk driver) is the first step of that arc.
 
 Milestone 32 also got a real follow-up fix this session: a genuine
 `#GP` under KVM while actually dragging a window, root-caused to the
@@ -506,8 +507,31 @@ the design reasoning and any real bugs found along the way.
     rows the shell's own banner/prompt occupy. All thirty-one QEMU
     smoke tests and all four host suites re-verified passing. See ADR
     0037.
+38. **A real ATA PIO disk driver** — the first step of the filesystem
+    arc, deliberately scoped to ONLY the disk-access layer (sector
+    read/write), not a filesystem format on top of it yet.
+    `kernel/drivers/ata.c` — polled PIO, legacy fixed ports, primary
+    channel, slave drive, 28-bit LBA; register layout/status bits/
+    command bytes/the IDENTIFY sector-count offset all verified
+    against the OSDev.org ATA PIO Mode article. A new `build/disk.img`
+    attached at the explicit `ide.0,unit=1` slot, chosen specifically
+    to never collide with `-cdrom`'s own conventional placement without
+    touching that proven boot path. Graceful "no drive" handling (no
+    panic) keeps every OTHER existing smoke test's own no-disk boot
+    unaffected. Found and fixed a real, serious, PRE-EXISTING race
+    condition during KVM verification, unrelated to the disk driver
+    itself: `display_server.c`'s boot-time setup loop had always
+    trusted the next inbox message was exactly what it expected — safe
+    under TCG's slow execution, but 100% reproducibly broken under real
+    KVM once the pulse app (Milestone 33) could send a background
+    REDRAW ping while the clock app (Milestone 35) was still completing
+    its own handshake. Root-caused with a full message-flow trace, fixed
+    with the same `dispatch_message()`-based technique Milestone 36
+    already established. Verified with real headless boots (with and
+    without a disk attached), a new smoke test, and 5+ repeat real-KVM
+    boots confirming both the driver and the race fix. See ADR 0038.
 
-**Testing state:** 31 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+**Testing state:** 32 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Almost every milestone has its own dedicated smoke
 test (Milestone 24 is the one exception — see item 24 above for why
@@ -515,11 +539,24 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** thirty-one
-milestones (9-37) all followed the same pattern — implement, boot in
+**A note on process discipline that held up well:** thirty-two
+milestones (9-38) all followed the same pattern — implement, boot in
 QEMU for real, fix what actually breaks, write the ADR describing what
 was tried and what was learned (including dead ends), commit in small
-logical pieces. Milestone 37's own verification pass is its own kind
+logical pieces. Milestone 38 is its own kind of story worth naming
+specifically: the disk driver ITSELF worked correctly on the first
+real attempt (both with and without a disk attached), but verifying it
+under real KVM surfaced a completely UNRELATED, pre-existing,
+100%-reproducible race in display_server.c's own boot-time message
+handling that had apparently existed since Milestone 35 without ever
+being caught — found only because this milestone's own KVM
+verification pass happened to run several REPEAT boots while chasing
+an unrelated frame-leak panic, root-caused with a real message-flow
+trace (not guessed), and fixed with the same technique Milestone 36
+had already established for the identical CLASS of problem. A concrete
+reminder that "verify under real KVM, repeatedly" is pulling its own
+weight independent of whatever the milestone at hand is actually
+about. Milestone 37's own verification pass is its own kind
 of story worth naming: neither of its two real findings (the `#BP`
 self-test's dump still reaching the screen, and a test's own
 byte-adjacency assumption breaking) was a kernel correctness bug —
@@ -611,11 +648,13 @@ discipline applied to a cosmetic-only concern for the first time.
 begins:
 
 - **A disk driver + real filesystem.** AUTHORIZED (2026-08-26, direct
-  user request: "go ahead with the filesystem work") — no longer
-  awaiting a decision, the arc is starting. Milestone 13's PCI scan
-  already found a real PIIX3 IDE controller in QEMU's default machine,
-  so the hardware path is there. See `docs/roadmap.md` for progress
-  once milestones land.
+  user request: "go ahead with the filesystem work") — in progress.
+  Milestone 38 (ADR 0038) delivered the disk-access layer: a real
+  polled-PIO ATA driver, reading/writing genuine 512-byte sectors on a
+  real attached disk. A filesystem FORMAT on top of it (and eventually
+  wiring path-based program loading to it, closing the last piece of
+  the original "path-based execve" gap) is still un-started —
+  see `docs/roadmap.md` for progress as further milestones land.
 - **ACPI-based shutdown** (as opposed to the reset-only `reboot`
   Milestone 15 already built). Needs ACPI table parsing, which is a
   listed non-goal ("ACPI power mgmt"). NOT authorized.

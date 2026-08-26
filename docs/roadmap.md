@@ -2020,3 +2020,58 @@ passing.
 splash — the screen is blank until the shell prompt/GUI appear; a real
 panic's on-screen summary is exception-name-only, full detail stays a
 `grep` away in serial.
+
+## 38. A real ATA PIO disk driver
+
+The first step of the filesystem arc the user explicitly authorized
+(2026-08-26: "go ahead with the filesystem work"), closing the one
+remaining item `future.md`'s own "Explicitly flagged" section had
+listed. Deliberately scoped to ONLY the disk-access layer — sector
+read/write — not a filesystem format on top of it, matching this
+roadmap's own hardest-unknown-first, one-subsystem-per-change
+sequencing.
+
+**Deliverables:**
+- `kernel/drivers/ata.c`/`.h` — polled PIO, legacy fixed ports
+  (0x1F0-0x1F7, 0x3F6), primary channel, slave drive, 28-bit LBA.
+  Register layout, status bits, command bytes, the 400ns-delay
+  technique, and the IDENTIFY sector-count field offset all verified
+  against the OSDev.org ATA PIO Mode article. `CACHE FLUSH` issued and
+  waited out after every write, a documented real gotcha this
+  milestone's own self-test would otherwise be vulnerable to.
+- A new `build/disk.img` (16MiB, `dd`-zeroed), attached at the
+  EXPLICIT slot `ide.0,unit=1` (primary slave) — never touching the
+  proven `-cdrom` boot path (secondary master, QEMU's own convention)
+  at all. Wired into `run`/`debug`; deliberately NOT into any other
+  existing smoke test.
+- Floating-bus detection with NO panic if no drive is found — every
+  other existing smoke test boots with no disk attached, and that must
+  stay the ordinary case, not a failure.
+- A real, serious, PRE-EXISTING race condition found and fixed during
+  KVM verification, unrelated to the disk driver itself:
+  `display_server.c`'s boot-time setup loop had always trusted the
+  next inbox message was exactly the REQUEST/PRESENT it expected — true
+  only as long as nothing else could message the server during setup.
+  That stopped being safe once the pulse app (Milestone 33) could start
+  sending background REDRAW pings while the clock app (Milestone 35)
+  was still completing its own handshake — TCG's slower execution
+  never exposed it, but real KVM's speed reliably did (100% reproducible
+  before the fix). Root-caused with a full message-flow trace (a stray
+  REDRAW misread as PRESENT, its shm_id field misread from the clock
+  app's own next REQUEST). Fixed using the same "keep processing
+  anything unexpected via dispatch_message(), don't trust the next
+  message blindly" technique Milestone 36 already established.
+
+**Verification:** Real headless boots both without and with the disk
+attached (IDENTIFY correctly reports the exact 16MiB geometry; a
+write/read-back round trip at LBA 2000 verified byte-for-byte).
+`tests/qemu/test_ata_selftest.sh` (new). 5+ repeat real-KVM boots with
+the disk attached, zero faults — and 5/5 clean repeat KVM boots
+confirming the display-server race fix (100% reproducible before it).
+All thirty-two QEMU smoke tests and all four host suites re-verified
+passing.
+**Design record:** `docs/adr/0038-ata-pio-disk-driver.md`.
+**Known limitations (accepted for this milestone only):**
+primary-slave-only, no IRQ-driven transfers, no 48-bit LBA, no
+partition table/MBR parsing, no ring-3 syscall exposure yet (kernel-only,
+proven by `kernel_main`'s own self-test).

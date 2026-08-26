@@ -27,6 +27,21 @@ static inline uint32_t inl(uint16_t port)
     return ret;
 }
 
+/* Milestone 38 (ADR 0038): 16-bit port I/O -- the ATA PIO data port
+   transfers exactly this width (one sector = 256 16-bit words), the
+   first thing in this kernel that's actually needed it. */
+static inline void outw(uint16_t port, uint16_t val)
+{
+    __asm__ volatile("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint16_t inw(uint16_t port)
+{
+    uint16_t ret;
+    __asm__ volatile("inw %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
 static inline void io_wait(void)
 {
     /* Port 0x80 is used by POST diagnostics; writing to it is the

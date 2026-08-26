@@ -12,6 +12,7 @@
 #include "drivers/mouse.h"
 #include "drivers/pci.h"
 #include "drivers/rtc.h"
+#include "drivers/ata.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "arch/x86_64/tss.h"
@@ -394,6 +395,55 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_log(" sec 0x");
     console_log_hex(boot_time.second);
     console_log("\n");
+
+    /* Milestone 38 (ADR 0038): pure port I/O, same placement reasoning
+       as the PCI/RTC self-tests just above. Deliberately NOT a panic
+       when no drive is found -- every OTHER existing smoke test boots
+       with no disk image attached at all (kernel/drivers/ata.h's own
+       doc comment), and that's the ordinary, expected case for them,
+       not a failure; only tests/qemu/test_ata_selftest.sh's own QEMU
+       invocation actually attaches build/disk.img. */
+    if (ata_init()) {
+        console_log("[OK] ata self-test: drive present, 0x");
+        console_log_hex(ata_sector_count());
+        console_log(" sectors (0x");
+        console_log_hex(ata_sector_count() * ATA_SECTOR_SIZE);
+        console_log(" bytes)\n");
+
+        /* LBA 2000 -- well clear of sector 0, where a future
+           filesystem milestone's own boot sector/superblock would
+           land; this scratch write/read-back round trip has no
+           business touching that territory even on a disk with no
+           filesystem on it yet. */
+        static uint8_t ata_write_buf[ATA_SECTOR_SIZE];
+        static uint8_t ata_read_buf[ATA_SECTOR_SIZE];
+        for (uint32_t i = 0; i < ATA_SECTOR_SIZE; i++) {
+            ata_write_buf[i] = (uint8_t)(i * 37u + 11u); /* an arbitrary, non-constant pattern -- a real byte-order/off-by-one bug in the PIO word loop would very likely corrupt SOME byte of this, unlike an all-0x00 or all-0xFF buffer */
+        }
+
+        if (!ata_write_sector(2000, ata_write_buf)) {
+            panic("ata self-test failed: write_sector reported failure");
+        }
+        if (!ata_read_sector(2000, ata_read_buf)) {
+            panic("ata self-test failed: read_sector reported failure");
+        }
+
+        bool ata_pattern_matched = true;
+        for (uint32_t i = 0; i < ATA_SECTOR_SIZE; i++) {
+            if (ata_read_buf[i] != ata_write_buf[i]) {
+                ata_pattern_matched = false;
+                break;
+            }
+        }
+        if (!ata_pattern_matched) {
+            panic("ata self-test failed: read-back pattern did not match what was written");
+        }
+        console_log("[OK] ata self-test passed, 0x");
+        console_log_hex(ATA_SECTOR_SIZE);
+        console_log(" byte read/write round trip verified byte-for-byte at LBA 0x7D0\n");
+    } else {
+        console_log("[OK] ata: no drive detected (expected unless build/disk.img is explicitly attached)\n");
+    }
 
     pic_remap();
     pit_init(TIMER_FREQUENCY_HZ);

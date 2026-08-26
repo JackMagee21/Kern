@@ -445,6 +445,58 @@ static void handle_drag(uint64_t x, uint64_t y)
 
 static void dispatch_message(const ipc_message_t *msg); /* forward decl: handle_dynamic_request() below needs to call this before its own definition later in this file */
 
+/* Milestone 38 (ADR 0038): the boot-time setup loop (main(), below)
+   used to trust that the NEXT message in its own inbox was always
+   exactly the REQUEST/PRESENT it was waiting for -- true only as long
+   as nothing else could ever message the server during boot's own
+   setup window. That stopped being safe once a persistent client (the
+   pulse app, Milestone 33) could start sending its own background
+   DISPLAY_OP_REDRAW pings WHILE a LATER client (the clock app,
+   Milestone 35) was still completing ITS OWN handshake -- a real race
+   TCG's much slower execution happened to never expose (pulse app's
+   own 200000-sys_nop pacing spin takes long enough, in real wall-clock
+   terms, under software emulation, that the whole 4-window boot
+   sequence always finished first), but real KVM's hardware-
+   accelerated speed genuinely CAN and DID trigger on a real boot (not
+   guessed -- a stray REDRAW ping got misread as the clock app's own
+   PRESENT, its shm_id field misread from what was actually a garbage
+   position in an unrelated message, corrupting the whole handshake --
+   found via a message-flow trace across kernel/ipc/msgqueue.c, not
+   assumed). Fixed the exact same way handle_dynamic_request()'s own
+   wait loop already handles this class of problem: keep processing
+   anything that ISN'T the specific expected message via
+   dispatch_message(), instead of trusting the next message blindly.
+   Safe by the SAME reasoning already established there: the go-signal
+   chain guarantees REQUESTs only ever arrive in the correct order, so
+   recv_boot_request()'s own filter always accepts the very first
+   message it sees; recv_boot_present()'s filter additionally checks
+   sender_pid, so it can never be fooled by a stray PRESENT-shaped
+   message from an unrelated client (dispatch_message()'s own default
+   case silently drops anything it doesn't recognize, the same
+   established "unknown message = drop" convention this protocol
+   already uses everywhere else). */
+static void recv_boot_request(ipc_message_t *out)
+{
+    for (;;) {
+        sys_ipc_recv(out);
+        if (out->fields[0] == DISPLAY_OP_REQUEST) {
+            return;
+        }
+        dispatch_message(out);
+    }
+}
+
+static void recv_boot_present(uint64_t expected_sender_pid, ipc_message_t *out)
+{
+    for (;;) {
+        sys_ipc_recv(out);
+        if (out->fields[0] == DISPLAY_OP_PRESENT && out->sender_pid == expected_sender_pid) {
+            return;
+        }
+        dispatch_message(out);
+    }
+}
+
 /* Milestone 36 (ADR 0036): the SAME REQUEST/GRANT/PRESENT/ACK
    handshake the boot-time setup loop (main(), below) already performs
    for windows 0-3 -- but reachable from the persistent event loop for
@@ -639,7 +691,7 @@ int main(void)
 
     for (uint32_t i = 0; i < WINDOWS_BOOT_COUNT; i++) {
         ipc_message_t req;
-        sys_ipc_recv(&req); /* blocks until this window's DISPLAY_OP_REQUEST arrives */
+        recv_boot_request(&req); /* blocks until this window's DISPLAY_OP_REQUEST arrives -- processing anything else that arrives first, see this function's own doc comment */
 
         uint64_t requested_w = req.fields[1];
         uint64_t requested_h = req.fields[2];
@@ -654,7 +706,7 @@ int main(void)
         sys_ipc_send(req.sender_pid, &grant);
 
         ipc_message_t pres;
-        sys_ipc_recv(&pres); /* blocks until THIS SAME client's DISPLAY_OP_PRESENT arrives -- guaranteed to be this one, not the other client's, by the clients' own go-signal ordering */
+        recv_boot_present(req.sender_pid, &pres); /* blocks until THIS SAME client's DISPLAY_OP_PRESENT arrives -- processing anything else (e.g. an already-onboarded persistent client's own background redraw) that arrives first, see recv_boot_present()'s own doc comment */
 
         uint64_t shm_id = pres.fields[1];
         uint64_t va = sys_shm_map(shm_id);
