@@ -246,7 +246,10 @@ static trap_frame_t *timer_tick_handler(trap_frame_t *frame)
 
     trap_frame_t *next_frame = (trap_frame_t *)current_task->rsp;
     scheduler_record_switch_diag(current_task->id, next_frame);
-    trap_frame_fixup_ss(next_frame); /* see trap_frame.h's own doc comment */
+    /* trap_frame_fixup_ss() is no longer called here -- irq_dispatch.c's
+       irq_handler() now applies it unconditionally to whatever frame it
+       returns, covering IRQ0 (this path) and every other IRQ line
+       uniformly from one site. See irq_dispatch.c's own doc comment. */
     return next_frame;
 }
 

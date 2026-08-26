@@ -136,3 +136,28 @@ fault ever shows a similarly corrupted CS (not just SS), the same
 defensive-reassertion technique would need extending; nothing currently
 monitors for that specific case, though the flight recorder kept
 permanently by this ADR would at least surface it for investigation.
+
+## Addendum (post-Milestone 33): the fixup didn't cover every IRQ line
+A real boot #GP'd under KVM while actually dragging a window (reported
+directly from a real `make run` session, not a smoke test) — same
+`#GP`, same GDT-index-4 error code, same shape as this ADR's original
+bug. Root cause: `trap_frame_fixup_ss()` had only ever been wired into
+`exceptions.c`'s `isr_handler` (its two early-return cases) and
+`scheduler.c`'s `timer_tick_handler` (IRQ0) — but `irq_dispatch.c`'s
+generic `irq_handler`, which every OTHER IRQ line (keyboard IRQ1,
+mouse IRQ12, ...) goes through, returned whatever frame it was handed
+straight to `iretq` with no fixup at all. Dragging a window fires IRQ12
+at a high rate while a ring-3 task is executing, hitting the exact same
+KVM SS-capture corruption this ADR already root-caused, just via a
+different interrupt source than the original COW-`#PF` finding. Fixed
+by moving the `trap_frame_fixup_ss()` call into `irq_handler` itself,
+applied unconditionally to whatever frame it's about to resume —
+covering every IRQ line (including IRQ0's own task-switch path,
+whose own now-redundant call inside `timer_tick_handler` was removed)
+from one common site, matching this ADR's own "every path that can
+hand a frame to iretq" invariant more completely than the original fix
+did. Verified: 3 repeat real-KVM boots each injecting several hundred
+rapid small mouse-move increments via the QEMU monitor while dragging
+(simulating a real continuous drag's IRQ12 rate) produced zero `#GP`
+faults; all 28 QEMU smoke tests re-verified passing, including
+`test_window_chrome_selftest.sh`'s own real drag/close assertions.

@@ -79,10 +79,17 @@ trap_frame_t *irq_handler(trap_frame_t *frame);
    guarantees" fix real kernels use for analogous SS-corruption classes
    around ring transitions (e.g. Linux's own workaround for AMD SYSRET
    leaving a stale/null SS, arch/x86/entry). Called from every path
-   that can hand a frame to iretq: kernel/sched/scheduler.c's
-   timer_tick_handler and kernel/arch/x86_64/exceptions.c's
+   that can hand a frame to iretq: kernel/arch/x86_64/exceptions.c's
    isr_handler (both early-return cases: #BP resume and resolved COW
-   #PF resume). A no-op for a ring-0 frame (cs RPL != 3). */
+   #PF resume), and -- since a real boot #GP'd while dragging a window,
+   proving the same corruption also hits a ring-3 task interrupted by
+   an ordinary hardware IRQ, not just a COW #PF -- kernel/arch/x86_64/
+   irq_dispatch.c's irq_handler, applied there unconditionally to
+   whatever frame it returns, covering every IRQ line (including IRQ0's
+   own task-switch path, formerly fixed up separately inside
+   scheduler.c's timer_tick_handler) from one common site rather than
+   each handler calling it individually. A no-op for a ring-0 frame (cs
+   RPL != 3). */
 static inline void trap_frame_fixup_ss(trap_frame_t *frame)
 {
     if ((frame->cs & 3) == 3) {
