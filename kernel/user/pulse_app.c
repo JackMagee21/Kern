@@ -24,7 +24,13 @@
    signals this process, so this process's own DISPLAY_OP_REQUEST is
    guaranteed to reach the server third, in the exact order the
    server's initial setup loop (display_server.c's own main()) expects
-   window_x[2]/window_y[2] to apply to. */
+   window_x[2]/window_y[2] to apply to.
+
+   Milestone 34 (ADR 0034): this process CAN now exit -- once per
+   frame it polls (sys_ipc_try_recv(), never blocking) for a server-
+   sent DISPLAY_OP_EXIT, the real fix for the gap Milestone 33's own
+   Known limitations flagged: closing this window used to leave this
+   process spinning forever with nothing displaying it. */
 
 #include <stdint.h>
 
@@ -63,6 +69,7 @@ static const uint32_t palette[] = { 0x00CC33FFu, 0x0033FF33u, 0x003333FFu, 0x00F
 static const char msg_ok[] = "[OK] pulse app: canvas presented via the display server, now animating\n";
 static const char msg_bad[] = "[FAIL] pulse app: display protocol handshake failed\n";
 static const char msg_go_bad[] = "[FAIL] pulse app: go-signal from client B had the wrong opcode\n";
+static const char msg_exit[] = "[OK] pulse app: received exit request, exiting\n";
 
 int main(void)
 {
@@ -118,17 +125,34 @@ int main(void)
     sys_write(msg_ok, sizeof(msg_ok) - 1);
 
     /* Milestone 33: unlike every earlier client, this process never
-       exits -- it keeps rewriting its OWN already-mapped canvas
-       (sys_shm_map() is never repeated, only the pixel CONTENTS
-       change) and pinging the server with DISPLAY_OP_REDRAW so the
-       new content actually reaches the screen. Created in kernel.c's
+       exits on its own -- it keeps rewriting its OWN already-mapped
+       canvas (sys_shm_map() is never repeated, only the pixel CONTENTS
+       change) and pinging the server with DISPLAY_OP_REDRAW so the new
+       content actually reaches the screen. Created in kernel.c's
        "permanent process" zone (before the frame-leak baseline), the
        same treatment display_server.c's own persistent process gets,
-       since this loop is designed to never return. */
+       since this loop was designed to never return on its own.
+
+       Milestone 34 (ADR 0034): "on its own" now has an exception --
+       once per frame (not every sys_nop, which would turn a cheap poll
+       into the dominant cost of this loop) this checks, with the
+       NON-blocking sys_ipc_try_recv(), whether the server sent
+       DISPLAY_OP_EXIT (its window was closed). Using sys_ipc_recv here
+       instead would mean blocking forever the moment a close arrives
+       is genuinely fine, but blocking forever WAITING for one that may
+       never come would kill this app's own animation -- exactly what
+       sys_ipc_try_recv (kernel/arch/x86_64/syscall.c) exists for. */
     for (;;) {
         for (uint64_t spin = 0; spin < FRAME_DELAY_NOPS; spin++) {
             sys_nop();
         }
+
+        ipc_message_t msg;
+        if (sys_ipc_try_recv(&msg) == 0 && msg.fields[0] == DISPLAY_OP_EXIT) {
+            sys_write(msg_exit, sizeof(msg_exit) - 1);
+            sys_exit(0);
+        }
+
         color_index = (color_index + 1) % PALETTE_LEN;
         for (uint64_t i = 0; i < pixel_count; i++) {
             buf[i] = palette[color_index];

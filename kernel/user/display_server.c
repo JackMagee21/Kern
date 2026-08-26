@@ -48,7 +48,16 @@
    already have mapped." Handling it needs no new per-window state at
    all: composite_all() already re-reads every window's stored `va`
    from scratch on every call, so whatever the client most recently
-   wrote is picked up automatically. */
+   wrote is picked up automatically.
+
+   Milestone 34 (ADR 0034): closing a window now actually tells its
+   owning client to exit (DISPLAY_OP_EXIT), rather than leaving it
+   running forever with nothing displaying it -- the real gap Milestone
+   33's own Known limitations flagged once the pulse app became the
+   first client that could still be alive when its window closes.
+   window_t gained a `pid` field (filled in once at grant time from the
+   client's own DISPLAY_OP_REQUEST) so handle_click()'s close branch
+   knows who to tell. */
 
 #include <stdint.h>
 
@@ -111,6 +120,7 @@ static const uint32_t window_y[WINDOWS_TOTAL] = { 500u, 550u, 520u };
 typedef struct {
     uint64_t x, y, w, h;
     uint64_t va;
+    uint64_t pid; /* Milestone 34 (ADR 0034): the client that granted this window, so a close can tell it to actually exit -- see DISPLAY_OP_EXIT's own doc comment */
     int closed;
 } window_t;
 
@@ -286,6 +296,18 @@ static void handle_click(uint64_t x, uint64_t y)
         }
         composite_all();
 
+        /* Milestone 34 (ADR 0034): tell the client that owned this
+           window to actually exit -- see DISPLAY_OP_EXIT's own doc
+           comment (display_protocol.h) for why this is always safe to
+           send even to a client that already exited on its own
+           (clients A/B). Sent AFTER composite_all(), not before --
+           this window is already gone from the screen and its own
+           closed flag already set, so even if the client is still
+           alive and could somehow act instantly, there's no ordering
+           hazard either way. */
+        ipc_message_t exit_msg = { .fields = { DISPLAY_OP_EXIT, 0, 0, 0 } };
+        sys_ipc_send(win->pid, &exit_msg);
+
         sys_write(msg_closed, sizeof(msg_closed) - 1);
         char digit = (char)('0' + win_idx);
         sys_write(&digit, 1);
@@ -418,6 +440,7 @@ int main(void)
         windows[i].w = granted_w;
         windows[i].h = granted_h;
         windows[i].va = va;
+        windows[i].pid = req.sender_pid; /* Milestone 34: remembered for DISPLAY_OP_EXIT on close */
         windows[i].closed = 0;
         z_order[i] = i;
 

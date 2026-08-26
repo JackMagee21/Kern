@@ -33,6 +33,12 @@ void sys_nop(void);
 uint64_t sys_ipc_send(uint64_t dest_pid, const ipc_message_t *msg);
 /* Always blocks until a message arrives; writes it into *out. */
 void sys_ipc_recv(ipc_message_t *out);
+/* Milestone 34 (ADR 0034): never blocks. Returns 0 and writes *out if a
+   message was already waiting, (uint64_t)-1 if the inbox was empty --
+   for a client (kernel/user/pulse_app.c) that needs to notice a
+   server-sent message without giving up its own event-loop pacing to
+   sit blocked in sys_ipc_recv. */
+uint64_t sys_ipc_try_recv(ipc_message_t *out);
 /* Returns a new shared-memory object id (never 0), or 0 on failure. */
 uint64_t sys_shm_create(uint64_t size);
 /* Maps shm_id into the caller's OWN address space; returns the mapped

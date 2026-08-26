@@ -66,6 +66,11 @@ void sys_ipc_recv(ipc_message_t *out)
     syscall2(7, (uint64_t)(uintptr_t)out, 0);
 }
 
+uint64_t sys_ipc_try_recv(ipc_message_t *out)
+{
+    return syscall2(13, (uint64_t)(uintptr_t)out, 0);
+}
+
 uint64_t sys_shm_create(uint64_t size)
 {
     return syscall2(8, size, 0);

@@ -17,14 +17,22 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 33 (2026-08-26)
+## State as of Milestone 34 (2026-08-26)
 
 **GUI arc COMPLETE** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
 with the user). Milestones 24-31 and 33 (below) are all seven of
 Desktop.md's own numbered items; Milestone 32 is a core correctness fix
-outside the GUI arc's own numbering (see its own entry below and
+outside the GUI arc's own numbering, and Milestone 34 is real
+GUI-arc-adjacent follow-on work (both see their own entries below and
 `docs/roadmap.md`).
+
+Milestone 32 also got a real follow-up fix this session: a genuine
+`#GP` under KVM while actually dragging a window, root-caused to the
+SS-fixup only being wired into the timer/exception paths, not the
+generic IRQ dispatcher every OTHER interrupt (keyboard, mouse) goes
+through. Fixed and verified with a real drag-storm repro under KVM —
+see ADR 0032's own Addendum section.
 
 **Real KVM acceleration is now safe and enabled** (`make run`/`make
 debug`, when `/dev/kvm` is accessible) — Milestone 32 found and fixed a
@@ -403,7 +411,28 @@ the design reasoning and any real bugs found along the way.
     caught by actually running the full regression suite, not assumed
     safe in advance. See ADR 0033.
 
-**Testing state:** 28 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+34. **A real client exit/close protocol** — not part of Desktop.md's
+    own arc (already complete), the top item this file's own
+    "Reasonable next steps" section flagged. `DISPLAY_OP_EXIT`
+    (`display_protocol.h`, opcode 7) tells a window's owning client to
+    actually exit when its close button is clicked, using a new
+    non-blocking `sys_ipc_try_recv` syscall (exposing the
+    already-existing `ipc_try_recv()` kernel primitive, which
+    `sys_ipc_recv`'s own doc comment had explicitly flagged as YAGNI
+    until something needed it) so the pulse app's animation loop can
+    poll for it once per frame without giving up its own pacing to
+    block waiting for a close that might never come. No reaper/
+    scheduler changes needed — the pulse app was already an ordinary
+    orphan process, so `sys_exit` and the existing reaper already
+    handle its exit the same way they handle every other process's.
+    Verified with a new smoke test confirming three independent facts
+    (the server's close marker, the CLIENT's own exit-received marker,
+    and a real reap marker after the shell prompt) plus a clean real-KVM
+    boot through the identical sequence — deliberately exercised under
+    KVM since this is exactly the code path ADR 0032's own bug class
+    lived in. See ADR 0034.
+
+**Testing state:** 29 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Almost every milestone has its own dedicated smoke
 test (Milestone 24 is the one exception — see item 24 above for why
@@ -411,12 +440,12 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** twenty-seven
-milestones (9-33) all followed the same pattern — implement, boot in
+**A note on process discipline that held up well:** twenty-eight
+milestones (9-34) all followed the same pattern — implement, boot in
 QEMU for real, fix what actually breaks, write the ADR describing what
 was tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15, 17-19, 21-22, 24, 27, 29, and 31 all
-landed correctly on the first real boot (Milestone 29's own real find
+logical pieces. Milestones 10-15, 17-19, 21-22, 24, 27, 29, 31, and 34
+all landed correctly on the first real boot (Milestone 29's own real find
 — a process blocking forever for external input would hang every OTHER
 test's reap-count gate — was caught in review, before ever booting, not
 from a live failure); Milestone 9 (per-process address spaces),
@@ -507,21 +536,12 @@ signal CLAUDE.md asks for before this territory gets touched.
 
 `Desktop.md`'s GUI arc (Milestones 24-31 and 33; Milestone 32 was a core
 correctness fix outside the arc's own numbering) is now COMPLETE — all
-seven of Desktop.md's own items are done. There is no single obvious
-"next arc" the way the GUI arc was; a few concrete candidates, none
+seven of Desktop.md's own items are done. Milestone 34 (real client
+exit/close protocol, see its own entry above and ADR 0034) closed the
+top item this section used to flag. There is no single obvious "next
+arc" the way the GUI arc was; a few concrete candidates remain, none
 flagged as a non-goal, none started:
 
-- **A real client exit/close protocol.** Closing a window still doesn't
-  reclaim its client process/shm reference (ADR 0031's own Known
-  limitations, still true after Milestone 33) — harmless for A/B (they
-  already exit on their own long before a close is even possible), but
-  the pulse app (Milestone 33) is the first client that could actually
-  still be running when its window is closed, and today closing its
-  window leaves its process spinning forever with nothing displaying
-  it. A real "tell a still-running client to exit, then the server
-  actually drops its own `shm_map()` reference" protocol is the natural
-  next piece of GUI-arc-adjacent work, even though it's not one of
-  Desktop.md's own seven numbered items.
 - **Dynamic window creation** (spawning a NEW window/program instance
   from the running shell, rather than every window being a fixed,
   compile-time `WINDOWS_TOTAL` slot created once at boot). Would need a

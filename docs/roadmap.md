@@ -1723,6 +1723,18 @@ permanently so a future, differently-shaped fault (e.g. a corrupted CS
 instead of SS) would at least be visible for investigation, not
 silently unexplained.
 
+**Addendum (post-Milestone 33):** a real boot `#GP`'d while actually
+dragging a window — the fixup above had only ever been wired into
+`isr_handler`'s two early-return cases and the timer's own task-switch
+path, not `irq_dispatch.c`'s generic `irq_handler`, which every OTHER
+IRQ line (keyboard, mouse) goes through. A real continuous drag fires
+IRQ12 at a high rate, hitting the exact same corruption via a different
+interrupt source. Fixed by moving the fixup into `irq_handler` itself,
+covering every IRQ line from one common site. Verified: 3 repeat
+real-KVM boots each injecting several hundred rapid mouse-move
+increments produced zero `#GP` faults; all 28 smoke tests re-verified
+passing. See ADR 0032's own Addendum section for the full account.
+
 ## 33. Real applications (a genuinely persistent, self-redrawing window)
 
 Desktop.md's own final GUI-arc item: "a small number of genuinely
@@ -1785,3 +1797,60 @@ This completes Desktop.md's own GUI arc (items 1-7). See `future.md`
 for this project's continuation briefing. Separately, still awaiting
 the user's decision: a disk driver + real filesystem, ACPI-based
 shutdown, and SMP/networking, all explicitly flagged non-goals.
+
+## 34. A real client exit/close protocol
+
+Not part of Desktop.md's own numbered arc (already complete as of
+Milestone 33) — the top item on `future.md`'s own "Reasonable next
+steps" list. Closes the real gap Milestone 33's Known limitations
+flagged: the pulse app is the first client that could still be running
+when its window is closed, and closing it used to leave the process
+spinning forever with nothing displaying it.
+
+**Deliverables:**
+- `DISPLAY_OP_EXIT` (`display_protocol.h`, opcode 7) — a no-fields
+  server → client ping: "you should exit now." Sent to `window_t`'s new
+  `pid` field (learned for free at grant time from the client's own
+  `DISPLAY_OP_REQUEST`), safe to send even to a long-exited client
+  (clients A/B) since a stale-pid `sys_ipc_send` already fails
+  silently, and pids are never recycled.
+- `sys_ipc_try_recv` (`SYS_IPC_TRY_RECV`, syscall 13) — a non-blocking
+  sibling of `sys_ipc_recv`, exposing the ALREADY-existing
+  `ipc_try_recv()` kernel primitive directly rather than building
+  anything new. `sys_ipc_recv`'s own doc comment had explicitly flagged
+  this as YAGNI until something needed it; the pulse app's animation
+  loop — which can't give up its own pacing to block waiting for a
+  close that might never come — is that something.
+- `pulse_app.c`'s loop polls once per animation frame (not once per
+  `sys_nop`, which would make the poll itself the loop's dominant
+  cost); on `DISPLAY_OP_EXIT`, prints an acknowledgment and calls
+  `sys_exit(0)`.
+- No reaper/scheduler changes needed — the pulse app was already an
+  ordinary orphan process (`parent_id = 0`); `sys_exit` and the
+  existing reaper already handle any process's exit uniformly.
+- `DISPLAY_SERVER_PERMANENT_CANVAS_PAGES` (Milestone 33) needed no
+  change — `kernel_main`'s own self-tests all run before the shell
+  prompt, strictly before any close can ever be injected, so the
+  default boot path (and its existing accounting) is unaffected.
+
+**Verification:** `tests/qemu/test_window_close_exit_selftest.sh`
+(new) — injects a real click on the pulse app's close button, then
+confirms three independent facts: the server's own close marker, the
+CLIENT's own "received exit request" marker (proof from the other side
+of the protocol), and a reap marker appearing strictly after the shell
+prompt (proof the process was genuinely collected, not just that it
+printed a message). A final screendump confirms none of its palette
+colors remain visible. Booted clean under real KVM with the identical
+close/exit/reap sequence, zero `#GP` faults — deliberately exercised
+under KVM since this is exactly the code path (a mid-boot input event)
+ADR 0032's own bug class lived in. All twenty-eight pre-existing smoke
+tests and all four host suites re-verified passing.
+**Design record:** `docs/adr/0034-client-exit-protocol.md`.
+**Known limitations (accepted for this milestone only):** no "relaunch
+a closed window" — its slot stays empty for the rest of the boot
+(dynamic window creation is still its own separate, un-started
+candidate). The server's own second shm reference to a closed window's
+canvas is still never dropped (the server itself never exits) — an
+unrelated, pre-existing, intentional property, unchanged by this
+milestone. Clients A/B still don't listen for `DISPLAY_OP_EXIT` (they
+don't need to — already gone by the time a close is possible).

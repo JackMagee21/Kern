@@ -249,11 +249,10 @@ static void sys_ipc_send(syscall_frame_t *frame)
    OWN user memory, validated up front -- the message itself is only
    ever written there once one has actually arrived, so there's no
    partial-write-then-fail case to worry about). ALWAYS blocks until a
-   message arrives -- no non-blocking variant is exposed yet, since
-   nothing this milestone needs one (a real event loop always wants to
-   block here; YAGNI on a poll-style variant until something actually
-   needs it). This is scheduler_block_current()'s first REAL consumer
-   outside its own Milestone 25 self-test. */
+   message arrives. A non-blocking sibling (sys_ipc_try_recv, Milestone
+   34) exists below now that something actually needed one -- see its
+   own doc comment. This is scheduler_block_current()'s first REAL
+   consumer outside its own Milestone 25 self-test. */
 static void sys_ipc_recv(syscall_frame_t *frame)
 {
     uint64_t out_ptr = frame->rdi;
@@ -267,6 +266,40 @@ static void sys_ipc_recv(syscall_frame_t *frame)
     while (!ipc_try_recv(self, &msg)) {
         sys_ipc_recv_block_count++;
         scheduler_block_current();
+    }
+
+    *(ipc_message_t *)(uintptr_t)out_ptr = msg;
+    frame->rax = 0;
+}
+
+/* Milestone 34 (ADR 0034): the non-blocking sibling sys_ipc_recv's own
+   doc comment above flagged as YAGNI until something actually needed
+   it -- a real client exit/close protocol does. kernel/user/pulse_app.c
+   is the first client that both (a) never returns from its own main
+   loop and (b) must still notice a server-sent DISPLAY_OP_EXIT without
+   giving up its own animation pacing to sit blocked in sys_ipc_recv
+   waiting for one that might never come. rdi = pointer to write the
+   received ipc_message_t into (validated the same way sys_ipc_recv's
+   own out_ptr already is). Returns 0 and writes *out if a message was
+   already waiting, (uint64_t)-1 (the same failure sentinel every other
+   fallible syscall here already uses) if the inbox was empty -- never
+   blocks, never calls scheduler_block_current(). Just ipc_try_recv()
+   (kernel/ipc/msgqueue.c), the EXACT non-blocking primitive
+   sys_ipc_recv's own loop already calls internally -- exposed directly
+   rather than duplicated. */
+static void sys_ipc_try_recv(syscall_frame_t *frame)
+{
+    uint64_t out_ptr = frame->rdi;
+    if (!vmm_is_user_range(out_ptr, sizeof(ipc_message_t))) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    task_t *self = scheduler_current_task();
+    ipc_message_t msg;
+    if (!ipc_try_recv(self, &msg)) {
+        frame->rax = (uint64_t)-1;
+        return;
     }
 
     *(ipc_message_t *)(uintptr_t)out_ptr = msg;
@@ -480,6 +513,9 @@ void syscall_dispatch(syscall_frame_t *frame)
         break;
     case SYS_INPUT_SUBSCRIBE:
         sys_input_subscribe(frame);
+        break;
+    case SYS_IPC_TRY_RECV:
+        sys_ipc_try_recv(frame);
         break;
     default:
         frame->rax = (uint64_t)-1;

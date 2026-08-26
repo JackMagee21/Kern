@@ -87,4 +87,22 @@
    bookkeeping needed at all. */
 #define DISPLAY_OP_REDRAW 6
 
+/* Milestone 34 (ADR 0034): server -> client, sent when this specific
+   client's window is closed (its close button was clicked) AND the
+   server still remembers which pid granted that window (window_t's own
+   `pid` field, kernel/user/display_server.c, filled in once at grant
+   time from the DISPLAY_OP_REQUEST's sender_pid). No fields used: the
+   only meaningful content is "you, specifically, should exit now."
+   Harmless to send to a client that has ALREADY exited on its own
+   (clients A/B, display_client_a.c/_b.c, present once then return) --
+   sys_ipc_send() to a pid the scheduler no longer recognizes just fails
+   (returns -1), silently, the same as any other message to a pid that
+   no longer exists; pids are never recycled (scheduler.c), so this can
+   never be misdelivered to an unrelated LATER process. A client that
+   actually still needs to notice this (kernel/user/pulse_app.c, the
+   only client so far that runs forever) polls for it with the
+   non-blocking sys_ipc_try_recv() rather than giving up its own
+   animation pacing to block waiting for one that might never come. */
+#define DISPLAY_OP_EXIT 7
+
 #endif /* KERNEL_USER_DISPLAY_PROTOCOL_H */
