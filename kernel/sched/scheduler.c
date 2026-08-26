@@ -150,6 +150,66 @@ task_t *scheduler_find_task(uint32_t id)
 uint64_t scheduler_current_pml4;
 uint64_t scheduler_target_pml4;
 
+/* Milestone 32 (ADR 0032): a small flight recorder of the last few
+   frames handed to iretq (from every path that can do so -- this
+   file's own timer_tick_handler, AND exceptions.c's isr_handler for
+   its two early-return cases, #BP resume and resolved COW #PF resume)
+   -- exceptions.c's isr_handler dumps this on a real #GP, so a crash
+   report shows what led up to it, not just the fault itself. Built to
+   root-cause a real, hardware-only (KVM, not TCG) SS-corruption bug --
+   see trap_frame.h's own trap_frame_fixup_ss() doc comment for the
+   full story and ADR 0032 for the complete diagnostic trail. Kept
+   permanently (not reverted once that bug was found and fixed): the
+   SAME technique -- capture recent state BEFORE a fault, not just AT
+   it -- is generically useful for any FUTURE fault this kernel can't
+   yet resolve, matching CLAUDE.md's own safety rule 6 ("print full
+   state to serial before halt") taken one step further ("and the
+   state leading up to it"). */
+#define SWITCH_DIAG_CAPACITY 8u
+typedef struct {
+    uint32_t task_id;
+    uint64_t rip, cs, ss, rsp, rflags;
+} switch_diag_entry_t;
+static switch_diag_entry_t switch_diag[SWITCH_DIAG_CAPACITY];
+static uint32_t switch_diag_index;
+
+void scheduler_record_switch_diag(uint32_t task_id, const trap_frame_t *frame)
+{
+    switch_diag_entry_t *e = &switch_diag[switch_diag_index % SWITCH_DIAG_CAPACITY];
+    e->task_id = task_id;
+    e->rip = frame->rip;
+    e->cs = frame->cs;
+    e->ss = frame->ss;
+    e->rsp = frame->rsp;
+    e->rflags = frame->rflags;
+    switch_diag_index++;
+}
+
+void scheduler_dump_switch_diag(void)
+{
+    console_write("[DIAG] last ");
+    console_write_hex(SWITCH_DIAG_CAPACITY);
+    console_write(" task switches (oldest first):\n");
+    uint32_t count = switch_diag_index < SWITCH_DIAG_CAPACITY ? switch_diag_index : SWITCH_DIAG_CAPACITY;
+    uint32_t start = switch_diag_index < SWITCH_DIAG_CAPACITY ? 0 : switch_diag_index;
+    for (uint32_t i = 0; i < count; i++) {
+        switch_diag_entry_t *e = &switch_diag[(start + i) % SWITCH_DIAG_CAPACITY];
+        console_write("  task=0x");
+        console_write_hex(e->task_id);
+        console_write(" rip=0x");
+        console_write_hex(e->rip);
+        console_write(" cs=0x");
+        console_write_hex(e->cs);
+        console_write(" ss=0x");
+        console_write_hex(e->ss);
+        console_write(" rsp=0x");
+        console_write_hex(e->rsp);
+        console_write(" rflags=0x");
+        console_write_hex(e->rflags);
+        console_write("\n");
+    }
+}
+
 static trap_frame_t *timer_tick_handler(trap_frame_t *frame)
 {
     pit_tick();
@@ -184,7 +244,10 @@ static trap_frame_t *timer_tick_handler(trap_frame_t *frame)
     syscall_set_user_rsp_slot(&current_task->saved_user_rsp); /* Milestone 20, ADR 0020 */
     scheduler_target_pml4 = current_task->pml4;
 
-    return (trap_frame_t *)current_task->rsp;
+    trap_frame_t *next_frame = (trap_frame_t *)current_task->rsp;
+    scheduler_record_switch_diag(current_task->id, next_frame);
+    trap_frame_fixup_ss(next_frame); /* see trap_frame.h's own doc comment */
+    return next_frame;
 }
 
 /* Pops the oldest pending zombie, or NULL if none are waiting. The

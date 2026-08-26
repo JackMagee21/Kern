@@ -2,6 +2,7 @@
 #define KERNEL_SCHED_SCHEDULER_H
 
 #include "task.h"
+#include "../arch/x86_64/trap_frame.h"
 
 /* Creates the bootstrap task representing kernel_main's own
    already-running context (its saved rsp is filled in lazily, the
@@ -131,5 +132,18 @@ task_t *scheduler_find_task(uint32_t id);
    than silently failing to track a live task. */
 void scheduler_register_task(task_t *task);
 void scheduler_unregister_task(task_t *task);
+
+/* Milestone 32 (ADR 0032): records one entry (task id + frame's
+   rip/cs/ss/rsp/rflags) into a small ring buffer;
+   scheduler_dump_switch_diag() prints its contents. Callable from any
+   frame-returning path (timer_tick_handler AND exceptions.c's
+   isr_handler) to build a flight recorder of recent task-switch state
+   -- exceptions.c dumps it on a real #GP. Originally built to root-
+   cause a real, hardware-only SS-corruption bug (see
+   kernel/arch/x86_64/trap_frame.h's trap_frame_fixup_ss()); kept
+   permanently since the same technique is generically useful for any
+   future fault this kernel can't yet resolve. */
+void scheduler_record_switch_diag(uint32_t task_id, const trap_frame_t *frame);
+void scheduler_dump_switch_diag(void);
 
 #endif /* KERNEL_SCHED_SCHEDULER_H */

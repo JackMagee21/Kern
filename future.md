@@ -17,11 +17,21 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 31 (2026-08-25)
+## State as of Milestone 32 (2026-08-26)
 
 **GUI arc in progress** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
-with the user). Milestones 24-31 (below) are the first eight steps.
+with the user). Milestones 24-31 (below) are the first eight steps;
+Milestone 32 is a core correctness fix outside the GUI arc's own
+numbering (see its own entry below and `docs/roadmap.md`).
+
+**Real KVM acceleration is now safe and enabled** (`make run`/`make
+debug`, when `/dev/kvm` is accessible) — Milestone 32 found and fixed a
+real, hardware-only ring-3 SS-corruption bug that made it unsafe
+before. `make run` now grabs the mouse automatically (GTK
+`grab-on-hover=on`, forced onto XWayland via `GDK_BACKEND=x11` — WSLg's
+own native-Wayland relative-pointer support is unreliable) for
+Milestone 31's own draggable windows.
 As of Milestone 31, per the user's own explicit request, booting
 through the `[OK]` self-checks now leads into a real, interactive GUI:
 two windows with title bars, draggable and closable with the mouse.
@@ -335,6 +345,25 @@ the design reasoning and any real bugs found along the way.
     hand-derived correction (not a loosened tolerance) for a genuine
     consequence of chrome: one window's title bar now also covers part
     of a neighbor's exposed canvas. See ADR 0031.
+32. **Real-hardware-only ring-3 SS corruption, and safe KVM
+    acceleration** — not a GUI-arc item; a core correctness fix found
+    investigating Milestone 31's own reported drag lag. KVM was the
+    actual performance fix needed, but booting under it immediately
+    exposed a real, reproducible `#GP` that TCG had silently never
+    reproduced across 30+ milestones, back to Milestone 18/21's
+    original fork/COW-fault code. Root-caused with hard evidence: a
+    defensive check added to `timer_tick_handler` did NOT catch the
+    fault, ruling out the obvious hypothesis before chasing it further;
+    a new, permanently-kept flight recorder
+    (`scheduler_record_switch_diag()`) is what actually found it — a
+    real hardware capture of a ring-3 COW `#PF` frame losing SS's RPL
+    bits (`0x23` → `0x20`) on a path TCG never reproduces. Fixed
+    defensively (`trap_frame_fixup_ss()`), not by chasing the exact
+    KVM/VT-x mechanism: this kernel's own architecture only ever uses
+    two possible SS values, so re-asserting the correct one is provably
+    safe regardless of the hypervisor's own reason for the corruption.
+    `make run`/`make debug` now enable KVM conditionally (checked at
+    `make` time, not hardcoded). See ADR 0032.
 
 **Testing state:** 27 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
@@ -344,8 +373,8 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** twenty-five
-milestones (9-31) all followed the same pattern — implement, boot in
+**A note on process discipline that held up well:** twenty-six
+milestones (9-32) all followed the same pattern — implement, boot in
 QEMU for real, fix what actually breaks, write the ADR describing what
 was tried and what was learned (including dead ends), commit in small
 logical pieces. Milestones 10-15, 17-19, 21-22, 24, 27, 29, and 31 all
@@ -439,14 +468,15 @@ signal CLAUDE.md asks for before this territory gets touched.
 ## Reasonable next steps (not flagged, not started)
 
 The main line of "what's next" is now `Desktop.md`'s GUI arc (Milestones
-24-31 done; Milestone 32 = real applications — a small number of
+24-31 done, Milestone 32 was a core correctness fix outside the arc's
+own numbering; Milestone 33 = real applications — a small number of
 genuinely different programs, not tech-demo processes, to actually use
 inside the now-draggable/closable windows). Note: closing a window
 currently doesn't reclaim its client process/shm reference (ADR 0031's
 own Known limitations) — fine for the current one-shot demo clients
 (already exited by the time a close is even possible), but a REAL
 close protocol (telling a still-running client to exit) will be needed
-once Milestone 32's own long-running apps exist. A real path-based
+once Milestone 33's own long-running apps exist. A real path-based
 `execve` remains blocked on the filesystem non-goal, which `Desktop.md`'s
 scope confirmation keeps deferred for this whole arc.
 

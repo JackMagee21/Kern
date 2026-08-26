@@ -4,6 +4,7 @@
 #include "trap_frame.h"
 #include "../../drivers/console.h"
 #include "../../mm/vmm.h"
+#include "../../sched/scheduler.h"
 
 /* Intel SDM Vol. 3A Table 6-1 "Protected-Mode Exceptions and
    Interrupts". Vectors 22-27/31 are architecturally reserved; 28-30 are
@@ -89,6 +90,8 @@ trap_frame_t *isr_handler(trap_frame_t *frame)
     if (frame->vector == 14 && (frame->error_code & 0x3) == 0x3) {
         uint64_t fault_addr = read_cr2();
         if (vmm_handle_cow_fault(fault_addr)) {
+            scheduler_record_switch_diag(scheduler_current_task()->id, frame); /* Milestone 32, ADR 0032, see scheduler.h */
+            trap_frame_fixup_ss(frame); /* see trap_frame.h's own doc comment */
             return frame; /* resolved -- resume the faulting instruction, which now succeeds */
         }
     }
@@ -96,6 +99,10 @@ trap_frame_t *isr_handler(trap_frame_t *frame)
     console_write("\n[PANIC] exception: ");
     console_write(exception_names[frame->vector]);
     console_write("\n");
+
+    if (frame->vector == 13) {
+        scheduler_dump_switch_diag(); /* Milestone 32, ADR 0032, see scheduler.h */
+    }
 
     dump_field("  vector:      0x", frame->vector);
     dump_field("  error_code:  0x", frame->error_code);
@@ -147,6 +154,8 @@ trap_frame_t *isr_handler(trap_frame_t *frame)
     dump_field("  r15:         0x", frame->r15);
 
     if (frame->vector == 3) {
+        scheduler_record_switch_diag(scheduler_current_task()->id, frame); /* Milestone 32, ADR 0032, see scheduler.h */
+        trap_frame_fixup_ss(frame); /* see trap_frame.h's own doc comment */
         return frame; /* resume exactly where interrupted; exceptions never trigger a task switch */
     }
 

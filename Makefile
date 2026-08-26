@@ -231,11 +231,30 @@ $(OS_ISO): $(KERNEL_ELF) boot/grub.cfg check-mb2
 # machine's own WSLg setup already provides XWayland (DISPLAY=:0,
 # confirmed set), so this doesn't add a new dependency, just a
 # different existing one.
+#
+# KVM_FLAG: CLAUDE.md's own Environment section says not to pass
+# -enable-kvm unless nested virtualization is CONFIRMED working, not
+# just assumed -- checked here at `make` invocation time (readable AND
+# writable /dev/kvm; a plain existence check isn't enough, group
+# membership can still deny access), not hardcoded, so this Makefile
+# stays correct on a future machine/container without either. Real
+# hardware acceleration turned out to be the actual fix for this
+# milestone's own reported drag lag (TCG's software interpretation of
+# this kernel's own per-pixel sys_fb_present() blit loop, run on every
+# single mouse-move event during a drag, was the real bottleneck) --
+# but enabling it also surfaced a REAL, independent hardware-
+# correctness bug (a ring-3 trap frame's SS selector losing its RPL
+# bits on a specific real-CPU/KVM code path that TCG never reproduced,
+# found and fixed -- see docs/adr/0032-real-hardware-ss-corruption.md)
+# that had to be fixed FIRST; -enable-kvm would not have been safe to
+# turn on before that fix existed.
+KVM_FLAG := $(shell test -r /dev/kvm -a -w /dev/kvm && echo -enable-kvm)
+
 run: $(OS_ISO)
-	GDK_BACKEND=x11 $(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on
+	GDK_BACKEND=x11 $(QEMU) $(KVM_FLAG) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on
 
 debug: $(OS_ISO)
-	GDK_BACKEND=x11 $(QEMU) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on -s -S &
+	GDK_BACKEND=x11 $(QEMU) $(KVM_FLAG) -cdrom $(OS_ISO) -serial stdio -no-reboot -no-shutdown -display gtk,grab-on-hover=on -s -S &
 	$(GDB) $(KERNEL_ELF) -ex "target remote :1234"
 
 clean:

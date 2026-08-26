@@ -1671,9 +1671,61 @@ not a growing leak) — a real close PROTOCOL (telling a still-running
 client to exit) is future work once windows host real, long-running
 applications.
 
-## 32. Real applications (sequence TBD)
+## 32. Real-hardware-only ring-3 SS corruption, and safe KVM acceleration
 
-Milestone 32 is intentionally left as a one-line placeholder here — full
+Not a GUI-arc milestone — a core boot→memory→sched correctness fix,
+CLAUDE.md's own top priority, found while investigating Milestone 31's
+own reported drag lag. Real hardware acceleration (KVM) turned out to
+be the actual performance fix needed, but booting under it immediately
+exposed a real, reproducible `#GP` fault that TCG's software emulation
+had silently never reproduced across 30+ milestones, going all the way
+back to Milestone 18/21's original fork/COW-fault code.
+
+**Deliverables:**
+- Root-caused with hard evidence, not the first plausible guess: a
+  defensive RPL-consistency check added to `timer_tick_handler` did
+  NOT catch the fault, ruling out the most obvious hypothesis and the
+  most common task-switch path before chasing it further. A small
+  flight recorder (`kernel/sched/scheduler.c`'s
+  `scheduler_record_switch_diag()`/`scheduler_dump_switch_diag()`,
+  capturing the last 8 frames handed to `iretq` from every path that
+  can do so, dumped automatically on a real `#GP`) is what actually
+  found it: a ring-3 process's own hardware-captured COW `#PF` frame
+  showing `ss=0x20` (RPL bits gone) just 0x14 bytes after its
+  synthetic entry frame correctly showed `ss=0x23` — real hardware
+  losing SS's RPL bits on a specific fault path TCG never reproduces.
+- Fixed defensively (`kernel/arch/x86_64/trap_frame.h`'s
+  `trap_frame_fixup_ss()`), not by chasing the exact KVM/VT-x mechanism
+  to full resolution: this kernel's own architecture guarantees only
+  two possible SS values ever exist, so re-asserting the correct one
+  based on the frame's own (never-corrupted) CS is provably safe. The
+  same "don't trust a value hardware has just demonstrated can be
+  unreliable here" pattern real kernels use for analogous SS-corruption
+  classes (e.g. Linux's own AMD SYSRET workaround).
+- `make run`/`make debug` now enable KVM conditionally
+  (`test -r /dev/kvm -a -w /dev/kvm`, checked at `make` invocation
+  time, not hardcoded) — CLAUDE.md requires CONFIRMING nested
+  virtualization works before ever passing `-enable-kvm`; this fix is
+  that confirmation, and the reason it wasn't safe to enable before.
+**Verification:** 5+ consecutive clean boots under real KVM after the
+fix, zero faults. All twenty-seven QEMU smoke tests and all four host
+suites re-verified passing under the original TCG path (the fix is a
+no-op whenever TCG's own always-correct capture is used).
+`-d int,cpu_reset` trace unchanged under TCG; the same trace under KVM
+correctly shows zero for both vectors (expected — that tracing hook is
+TCG-only, bypassed entirely by hardware-accelerated execution, not a
+regression).
+**Design record:** `docs/adr/0032-real-hardware-ss-corruption.md`.
+**Known limitations (accepted for this milestone only):** the exact
+hypervisor/silicon mechanism producing the corrupted capture isn't
+fully understood, only defended against — the flight recorder is kept
+permanently so a future, differently-shaped fault (e.g. a corrupted CS
+instead of SS) would at least be visible for investigation, not
+silently unexplained.
+
+## 33. Real applications (sequence TBD)
+
+Milestone 33 is intentionally left as a one-line placeholder here — full
 breakdown (deliverables/acceptance criteria/estimates/risks) gets written
 up when that milestone actually starts, not in advance, to avoid designing
 against assumptions already-implemented milestones might overturn. Next
