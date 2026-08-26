@@ -467,9 +467,10 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
        this pid must be known here first. */
     task_t *display_server_process = task_create_user_image(display_server_image_start, display_server_image_end);
     scheduler_add_task(display_server_process);
+    shell_set_display_server_pid(display_server_process->id); /* Milestone 36 (ADR 0036): so the shell's own `spawn` command can bootstrap a dynamically-launched client */
     console_write("[OK] display server process created, pid 0x");
     console_write_hex(display_server_process->id);
-    console_write(" (persistent -- serves its four clients below, then waits forever for input)\n");
+    console_write(" (persistent -- serves its four clients below, then waits forever for input, plus any later `spawn`ed ones)\n");
 
     /* Milestone 33 (ADR 0033): the pulse app -- created HERE too, in
        this same "permanent process" zone, before the frame-leak

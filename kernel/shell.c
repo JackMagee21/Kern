@@ -9,7 +9,28 @@
 #include "drivers/mouse.h"
 #include "drivers/cursor.h"
 #include "arch/x86_64/reboot.h"
+#include "sched/task.h"
+#include "sched/scheduler.h"
+#include "ipc/msgqueue.h"
+#include "user/display_protocol.h" /* DISPLAY_OP_GO -- see spawn_app()'s own doc comment for why the shell needs this, Milestone 36 (ADR 0036) */
 #include "../libk/fmt.h"
+
+/* Milestone 36 (ADR 0036): the SAME embedded images kernel.c already
+   declares (kernel/user/embed/pulse_app_blob.asm/clock_app_blob.asm)
+   -- `extern` here too so spawn_app() can hand either one to
+   task_create_user_image() at runtime, from a real shell command,
+   rather than only ever at boot. */
+extern const uint8_t pulse_app_image_start[];
+extern const uint8_t pulse_app_image_end[];
+extern const uint8_t clock_app_image_start[];
+extern const uint8_t clock_app_image_end[];
+
+static uint32_t display_server_pid;
+
+void shell_set_display_server_pid(uint32_t pid)
+{
+    display_server_pid = pid;
+}
 
 #define SHELL_LINE_MAX 128
 
@@ -87,6 +108,54 @@ static void read_line(char *buf, int max_len)
     buf[len] = '\0';
 }
 
+/* Milestone 36 (ADR 0036): launches a genuinely NEW instance of an
+   already-embedded GUI program at runtime -- kernel/user/pulse_app.c
+   and kernel/user/clock_app.c are the only two clients that make sense
+   to spawn this way (both persistent, both closeable, both requiring
+   no other client's own go-signal to get started). A real path-based
+   `execve` (launching an ARBITRARY program, not just one of a fixed
+   embedded set) remains blocked on the filesystem non-goal
+   (CLAUDE.md) -- this is deliberately narrower: the same fixed set of
+   programs this kernel has always been able to run, just launched at a
+   moment of the user's own choosing instead of only at boot.
+
+   Injects TWO messages, not one -- a boot message (fields[0] = the
+   server's pid) exactly like kernel_main's own boot-time injection,
+   THEN a synthetic DISPLAY_OP_GO. Both pulse_app.c and clock_app.c
+   already unconditionally wait for a go-signal before their own first
+   DISPLAY_OP_REQUEST (Milestone 33/35's own go-signal chain) -- rather
+   than restructuring either program to make that wait conditional,
+   the kernel just satisfies the SAME wait a peer client would have,
+   letting a dynamically spawned instance reuse both programs
+   completely unmodified. This is the one deliberate, narrow exception
+   to display_protocol.h's own "the kernel never interprets these
+   opcodes" stance (see that file's own updated doc comment) -- the
+   kernel doesn't branch on DISPLAY_OP_GO's meaning here, it just
+   constructs the exact message a peer client would have sent. */
+static void spawn_app(const uint8_t *image_start, const uint8_t *image_end, const char *label)
+{
+    if (display_server_pid == 0) {
+        console_write("spawn failed: display server not available yet\n");
+        return;
+    }
+
+    task_t *task = task_create_user_image(image_start, image_end);
+    scheduler_add_task(task);
+
+    ipc_message_t boot = { .fields = { display_server_pid, 0, 0, 0 } };
+    ipc_message_t go = { .fields = { DISPLAY_OP_GO, 0, 0, 0 } };
+    if (!ipc_send(task, &boot) || !ipc_send(task, &go)) {
+        console_write("spawn failed: bootstrap inbox somehow already full\n");
+        return;
+    }
+
+    console_write("[OK] spawned ");
+    console_write(label);
+    console_write(", pid 0x");
+    console_write_hex(task->id);
+    console_write("\n");
+}
+
 static void run_command(const char *line)
 {
     if (line[0] == '\0') {
@@ -94,7 +163,11 @@ static void run_command(const char *line)
     }
 
     if (str_eq(line, "help")) {
-        console_write("commands: help, echo <text>, uptime, date, mouse, reboot, clear\n");
+        console_write("commands: help, echo <text>, uptime, date, mouse, reboot, clear, spawn pulse, spawn clock\n");
+    } else if (str_eq(line, "spawn pulse")) {
+        spawn_app(pulse_app_image_start, pulse_app_image_end, "pulse app");
+    } else if (str_eq(line, "spawn clock")) {
+        spawn_app(clock_app_image_start, clock_app_image_end, "clock app");
     } else if (str_eq(line, "mouse")) {
         console_write("waiting for a mouse event (move it or click)...\n");
         while (!mouse_has_event()) {

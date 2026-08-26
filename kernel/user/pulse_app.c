@@ -135,9 +135,20 @@ int main(void)
        OWN canvas is confirmed on screen (the ACK just received above).
        Keeps the server's fixed per-slot window_x[3]/window_y[3]
        assignment deterministic by construction, same reasoning as
-       every earlier link. */
-    ipc_message_t go_d = { .fields = { DISPLAY_OP_GO, 0, 0, 0 } };
-    sys_ipc_send(clock_app_pid, &go_d);
+       every earlier link.
+
+       Milestone 36 (ADR 0036): only forwards when clock_app_pid is
+       actually nonzero. kernel/shell.c's `spawn` command can now start
+       a SECOND, standalone instance of this exact program at runtime,
+       with no chain to forward anything down (its own boot message's
+       fields[1] is left 0) -- forwarding to pid 0 would misdeliver
+       into the bootstrap kernel thread's own inbox (task id 0), not a
+       crash but a real correctness bug (a stray, never-read message
+       silently occupying a queue slot forever). */
+    if (clock_app_pid != 0) {
+        ipc_message_t go_d = { .fields = { DISPLAY_OP_GO, 0, 0, 0 } };
+        sys_ipc_send(clock_app_pid, &go_d);
+    }
 
     /* Milestone 33: unlike every earlier client, this process never
        exits on its own -- it keeps rewriting its OWN already-mapped

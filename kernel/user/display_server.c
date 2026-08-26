@@ -99,14 +99,50 @@
    position; dragging must not be able to undo that fix. */
 #define FBCONSOLE_MAX_HEIGHT_PX 480u
 
+/* Milestone 36 (ADR 0036): placement for a DYNAMICALLY spawned window
+   (handle_dynamic_request(), below) -- deliberately simpler than the
+   boot-time window_x[]/window_y[] table, since a spawned window's
+   exact position was never load-bearing for any test's exact-pixel
+   assertions (unlike the boot-time four). Cascades diagonally so
+   several spawns in a row are still individually clickable rather than
+   stacking exactly on top of each other; wraps back to the base point
+   every DYNAMIC_CASCADE_SLOTS spawns rather than walking off-screen.
+
+   Placed in the genuinely EMPTY horizontal gap between client B's own
+   right edge (150 + 200 = 350) and the pulse/clock apps' own left edge
+   (650) -- x=380 .. x=380+3*10+200=610 (all four cascade slots) stays
+   entirely within that gap, so a dynamically spawned window never
+   overlaps ANY boot-time window. This is NOT because overlapping
+   compositing is broken (it isn't -- z-order painting genuinely
+   handles it, and dragging a window into an overlap already proves
+   this, Milestone 31): investigating an early version of this
+   milestone that DID place spawned windows over client B found that
+   QEMU's own `screendump` monitor command can show STALE pixel data
+   for a region a headless "-display none" session hasn't actively
+   redrawn in a while, even though a kernel-side readback
+   (fb_read_rect(), kernel/drivers/framebuffer.c) taken immediately
+   after the exact same write confirmed the real framebuffer memory was
+   already correct -- a QEMU/test-harness display-refresh artifact, not
+   a kernel bug (verified directly, not assumed: CLAUDE.md's "diagnose
+   first" discipline applied all the way to the actual root cause
+   before deciding this wasn't worth chasing further upstream). Picking
+   a non-overlapping default position sidesteps needing to work around
+   that QEMU-side artifact in every future screendump-based smoke test,
+   without giving up anything this milestone actually needs to prove. */
+#define DYNAMIC_BASE_X 380u
+#define DYNAMIC_BASE_Y 560u
+#define DYNAMIC_CASCADE_STEP_X 10u
+#define DYNAMIC_CASCADE_STEP_Y 10u
+#define DYNAMIC_CASCADE_SLOTS 4u
+
 /* Milestone 30 (ADR 0030) / Milestone 33 (ADR 0033) / Milestone 35
-   (ADR 0035): a fixed cascade placement, one entry per client, in the
-   exact order this server expects to serve them (client A first,
-   client B second, the pulse app third, the clock app fourth --
-   enforced by the A->B->C->D go-signal chain, not assumed).
-   Window 1 is offset (+50, +50) from window 0 so their granted
-   200x150/200x150 canvases genuinely overlap (a 150x100 shared
-   region) -- windows A/B's own exact-pixel test assertions
+   (ADR 0035): a fixed cascade placement, one entry per client THIS
+   SERVER SERVES AT BOOT, in the exact order it expects to serve them
+   (client A first, client B second, the pulse app third, the clock
+   app fourth -- enforced by the A->B->C->D go-signal chain, not
+   assumed). Window 1 is offset (+50, +50) from window 0 so their
+   granted 200x150/200x150 canvases genuinely overlap (a 150x100
+   shared region) -- windows A/B's own exact-pixel test assertions
    (tests/qemu/test_display_server_selftest.sh, test_window_chrome_
    selftest.sh) depend on this pair's geometry exactly as before.
    Window 2 (the pulse app) is placed well clear of both -- x=650
@@ -120,9 +156,21 @@
    + CHROME_H (windows 0-2) so even each window's OWN title bar starts
    outside the console's reserved scroll region from the moment it's
    first drawn -- window 3 clears this by construction too (700 > 480). */
-#define WINDOWS_TOTAL 4u
-static const uint32_t window_x[WINDOWS_TOTAL] = { 100u, 150u, 650u, 650u };
-static const uint32_t window_y[WINDOWS_TOTAL] = { 500u, 550u, 520u, 700u };
+#define WINDOWS_BOOT_COUNT 4u
+static const uint32_t window_x[WINDOWS_BOOT_COUNT] = { 100u, 150u, 650u, 650u };
+static const uint32_t window_y[WINDOWS_BOOT_COUNT] = { 500u, 550u, 520u, 700u };
+
+/* Milestone 36 (ADR 0036): a FIXED-CAPACITY array, not a general
+   dynamic list -- the same "bounded array, scanned/managed, sized
+   generously for this hobby kernel's scale" pattern
+   kernel/sched/scheduler.c's own MAX_LIVE_TASKS registry and
+   kernel/drivers/mouse.c's own event queues already established, not a
+   new one invented here. WINDOWS_BOOT_COUNT (4) windows are always
+   created during boot's own deterministic setup loop below;
+   WINDOWS_CAPACITY - WINDOWS_BOOT_COUNT (4 more) are available for
+   `shell spawn`-launched windows (kernel/shell.c) requested later, at
+   any point, from this server's own persistent event loop. */
+#define WINDOWS_CAPACITY 8u
 
 /* Milestone 30: each window's full state, kept alive for the server's
    ENTIRE (persistent) lifetime -- recompositing on a raise/drag needs
@@ -137,12 +185,25 @@ typedef struct {
     int closed;
 } window_t;
 
-static window_t windows[WINDOWS_TOTAL];
-/* z_order[0] = bottom (drawn first), z_order[WINDOWS_TOTAL-1] = top
+static window_t windows[WINDOWS_CAPACITY];
+/* z_order[0] = bottom (drawn first), z_order[windows_used-1] = top
    (drawn last, wins any overlap). Values are indices into windows[].
-   Starts as identity (window 0 bottom, window 1 top), matching the
-   initial setup loop's own presentation order. */
-static uint32_t z_order[WINDOWS_TOTAL];
+   Starts as identity (window 0 bottom, window 1 top, ...) for the
+   WINDOWS_BOOT_COUNT boot-time windows, matching the initial setup
+   loop's own presentation order; a dynamically spawned window
+   (Milestone 36) is always appended at the current top. */
+static uint32_t z_order[WINDOWS_CAPACITY];
+
+/* Milestone 36 (ADR 0036): how many of windows[]/z_order[]'s
+   WINDOWS_CAPACITY slots are actually in use right now -- starts at
+   WINDOWS_BOOT_COUNT once the initial setup loop completes, and grows
+   by one for each successful dynamic spawn (handle_dynamic_request()).
+   Every function that used to loop `0..WINDOWS_TOTAL` (composite_all(),
+   hit_test(), raise_to_top()) now loops `0..windows_used` instead --
+   this is the ONLY change any of those three needed, since none of
+   them ever assumed a compile-time-fixed bound beyond that loop
+   itself. */
+static uint32_t windows_used;
 
 /* Milestone 31: -1 when no drag is in progress, else the index (into
    windows[], NOT a z_order position) of the window being dragged.
@@ -187,6 +248,9 @@ static const char msg_raised[] = "[OK] display server: raised window 0x";
 static const char msg_drag_start[] = "[OK] display server: started dragging window 0x";
 static const char msg_dragged[] = "[OK] display server: dragged window 0x";
 static const char msg_closed[] = "[OK] display server: closed window 0x";
+static const char msg_spawn_ok[] = "[OK] display server: dynamically presented window 0x";
+static const char msg_spawn_full[] = "[FAIL] display server: dynamic spawn rejected (WINDOWS_CAPACITY reached)\n";
+static const char msg_spawn_failed[] = "[FAIL] display server: mapping a dynamically spawned client's buffer failed\n";
 
 static void init_chrome_buffer(void)
 {
@@ -219,12 +283,12 @@ static void present_window(const window_t *win)
 
 static void composite_all(void)
 {
-    for (uint32_t i = 0; i < WINDOWS_TOTAL; i++) {
+    for (uint32_t i = 0; i < windows_used; i++) {
         present_window(&windows[z_order[i]]);
     }
 }
 
-/* Returns the z_order POSITION (0..WINDOWS_TOTAL-1) of the topmost
+/* Returns the z_order POSITION (0..windows_used-1) of the topmost
    OPEN window whose title bar, close button, or canvas contains
    (px, py), scanning from the top down -- the real hit-testing
    convention (whichever window is drawn LAST visually wins any point
@@ -234,7 +298,7 @@ static void composite_all(void)
    window. */
 static int hit_test(uint64_t px, uint64_t py, int *out_region)
 {
-    for (uint32_t pos = WINDOWS_TOTAL; pos-- > 0;) {
+    for (uint32_t pos = windows_used; pos-- > 0;) {
         const window_t *win = &windows[z_order[pos]];
         if (win->closed) {
             continue;
@@ -259,28 +323,30 @@ static int hit_test(uint64_t px, uint64_t py, int *out_region)
 }
 
 /* Milestone 33 (ADR 0033): a general shift, not a fixed 2-element
-   swap -- WINDOWS_TOTAL is now 3, and a 2-element swap is simply wrong
-   for raising a window out of the BOTTOM of a 3-deep stack (it would
-   only ever exchange positions 0 and 1, never actually reaching the
-   top). Shifts every window ABOVE hit_pos down by one slot, then
-   places the raised window at the very top -- reduces to the exact
-   same swap as before whenever hit_pos == 0 and WINDOWS_TOTAL == 2, so
-   this isn't a behavior change for that case, just a correct
-   generalization for N > 2. */
+   swap -- a 2-element swap is simply wrong for raising a window out of
+   the BOTTOM of a deeper stack (it would only ever exchange positions
+   0 and 1, never actually reaching the top). Shifts every window
+   ABOVE hit_pos down by one slot, then places the raised window at the
+   very top -- reduces to the exact same swap as before whenever
+   hit_pos == 0 and windows_used == 2. Already generalized to any
+   window COUNT at Milestone 33; Milestone 36 only changes WHERE that
+   count comes from (windows_used, a runtime variable that can now grow
+   after a dynamic spawn, not the compile-time WINDOWS_TOTAL this
+   function used to read). */
 static void raise_to_top(int hit_pos)
 {
-    if ((uint32_t)hit_pos == WINDOWS_TOTAL - 1) {
+    if ((uint32_t)hit_pos == windows_used - 1) {
         return; /* already topmost */
     }
     uint32_t raised = z_order[hit_pos];
-    for (uint32_t i = (uint32_t)hit_pos; i < WINDOWS_TOTAL - 1; i++) {
+    for (uint32_t i = (uint32_t)hit_pos; i < windows_used - 1; i++) {
         z_order[i] = z_order[i + 1];
     }
-    z_order[WINDOWS_TOTAL - 1] = raised;
+    z_order[windows_used - 1] = raised;
     composite_all();
 
     sys_write(msg_raised, sizeof(msg_raised) - 1);
-    char digit = (char)('0' + z_order[WINDOWS_TOTAL - 1]);
+    char digit = (char)('0' + z_order[windows_used - 1]);
     sys_write(&digit, 1);
     sys_write("\n", 1);
 }
@@ -377,6 +443,155 @@ static void handle_drag(uint64_t x, uint64_t y)
     sys_write("\n", 1);
 }
 
+static void dispatch_message(const ipc_message_t *msg); /* forward decl: handle_dynamic_request() below needs to call this before its own definition later in this file */
+
+/* Milestone 36 (ADR 0036): the SAME REQUEST/GRANT/PRESENT/ACK
+   handshake the boot-time setup loop (main(), below) already performs
+   for windows 0-3 -- but reachable from the persistent event loop for
+   a client that shows up AFTER boot, at any time (kernel/shell.c's
+   `spawn` command). Grants (0, 0) -- an existing, already-handled
+   failure shape every client's own handshake already checks for
+   (`if (granted_w == 0 || granted_h == 0) { fail }`, e.g.
+   pulse_app.c/clock_app.c) -- if WINDOWS_CAPACITY is already reached,
+   needing no new client-side logic at all. */
+static void handle_dynamic_request(const ipc_message_t *req)
+{
+    if (windows_used >= WINDOWS_CAPACITY) {
+        ipc_message_t grant = { .fields = { DISPLAY_OP_GRANT, 0, 0, 0 } };
+        sys_ipc_send(req->sender_pid, &grant);
+        sys_write(msg_spawn_full, sizeof(msg_spawn_full) - 1);
+        return;
+    }
+
+    uint32_t idx = windows_used;
+    uint64_t requested_w = req->fields[1];
+    uint64_t requested_h = req->fields[2];
+    uint64_t granted_w = requested_w < MAX_CANVAS_W ? requested_w : MAX_CANVAS_W;
+    uint64_t granted_h = requested_h < MAX_CANVAS_H ? requested_h : MAX_CANVAS_H;
+
+    uint32_t slot = (idx - WINDOWS_BOOT_COUNT) % DYNAMIC_CASCADE_SLOTS;
+    uint64_t x = DYNAMIC_BASE_X + slot * DYNAMIC_CASCADE_STEP_X;
+    uint64_t y = DYNAMIC_BASE_Y + slot * DYNAMIC_CASCADE_STEP_Y;
+
+    ipc_message_t grant = { .fields = { DISPLAY_OP_GRANT, x, y, (granted_w << 32) | granted_h } };
+    sys_ipc_send(req->sender_pid, &grant);
+
+    /* Waits specifically for THIS client's own DISPLAY_OP_PRESENT --
+       but, unlike the boot-time setup loop (which runs before input is
+       even enabled, kernel/kernel.c's own ordering), input IS already
+       flowing by the time a dynamic spawn can happen. A mouse click on
+       an existing window could genuinely arrive in this exact window,
+       and popping it here by mistake (treating its fields as a bogus
+       shm id) would corrupt state. dispatch_message() (below) handles
+       any message that ISN'T the expected PRESENT exactly the way the
+       main loop already would, then keeps waiting -- the same
+       "process everything else normally while still waiting for one
+       specific reply" pattern, not a new one. */
+    ipc_message_t pres;
+    for (;;) {
+        sys_ipc_recv(&pres);
+        if (pres.fields[0] == DISPLAY_OP_PRESENT && pres.sender_pid == req->sender_pid) {
+            break;
+        }
+        dispatch_message(&pres);
+    }
+
+    uint64_t shm_id = pres.fields[1];
+    uint64_t va = sys_shm_map(shm_id);
+    if (va == 0) {
+        sys_write(msg_spawn_failed, sizeof(msg_spawn_failed) - 1);
+        return; /* malformed client -- drop it silently rather than risk the server itself */
+    }
+
+    windows[idx].x = x;
+    windows[idx].y = y;
+    windows[idx].w = granted_w;
+    windows[idx].h = granted_h;
+    windows[idx].va = va;
+    windows[idx].pid = req->sender_pid;
+    windows[idx].closed = 0;
+    z_order[windows_used] = idx;
+    windows_used++;
+
+    present_window(&windows[idx]);
+
+    ipc_message_t ack = { .fields = { DISPLAY_OP_ACK, 0, 0, 0 } };
+    sys_ipc_send(req->sender_pid, &ack);
+
+    sys_write(msg_spawn_ok, sizeof(msg_spawn_ok) - 1);
+    char idx_digit = (char)('0' + idx);
+    sys_write(&idx_digit, 1);
+    sys_write("\n", 1);
+}
+
+/* Milestone 36 (ADR 0036): factored out of what used to be the
+   persistent event loop's own inline switch, so handle_dynamic_
+   request()'s own "keep processing everything else while waiting for
+   one specific reply" sub-loop (above) can reuse the EXACT same
+   dispatch, not a parallel copy that could silently drift out of
+   sync.
+
+   Dispatches on sender_pid FIRST, then on the opcode -- found (in
+   review, before ever booting) that INPUT_EVENT_CLICK/DRAG/RELEASE
+   (input_protocol.h: 1/2/3) and DISPLAY_OP_REQUEST/GRANT/PRESENT
+   (display_protocol.h: 1/2/3) are two INDEPENDENTLY numbered
+   protocols that happen to share the exact same low opcode values --
+   never a problem before this milestone, since DISPLAY_OP_REQUEST was
+   only ever consumed by main()'s own dedicated boot-time loop
+   (running before input is even enabled), never this switch. Now that
+   handle_dynamic_request() needs DISPLAY_OP_REQUEST reachable from
+   HERE, a plain single switch on fields[0] would silently treat a
+   spawned client's REQUEST (opcode 1) as an INPUT_EVENT_CLICK (also
+   opcode 1). Fixed using an existing, verified invariant (read
+   directly from the source, not assumed): kernel/drivers/
+   input_router.c's own input_router_notify() calls ipc_send()
+   directly (never sys_ipc_send()), so its message's sender_pid is left
+   at its struct-literal default of 0 (ipc_message.h's own doc comment:
+   sender_pid is normally filled in by sys_ipc_send() alone) -- and no
+   real ring-3 client can ever legitimately have pid 0 (task ids start
+   at 1, scheduler.c). sender_pid == 0 is therefore a safe, load-
+   bearing way to tell "this is a kernel-originated input event" from
+   "this is a real client's display-protocol message", not a guess. */
+static void dispatch_message(const ipc_message_t *msg)
+{
+    if (msg->sender_pid == 0) {
+        uint64_t x = msg->fields[1];
+        uint64_t y = msg->fields[2];
+        switch (msg->fields[0]) {
+        case INPUT_EVENT_CLICK:
+            handle_click(x, y);
+            break;
+        case INPUT_EVENT_DRAG:
+            handle_drag(x, y);
+            break;
+        case INPUT_EVENT_RELEASE:
+            dragging_window = -1;
+            break;
+        default:
+            break; /* not a kernel-originated event shape this server understands yet */
+        }
+        return;
+    }
+
+    switch (msg->fields[0]) {
+    case DISPLAY_OP_REDRAW:
+        /* Milestone 33: a client (the pulse app or clock app) wrote
+           fresh pixels into its ALREADY-mapped shm buffer and wants a
+           recomposite -- no per-window lookup needed, see this file's
+           own top-of-file comment for why. */
+        composite_all();
+        break;
+    case DISPLAY_OP_REQUEST:
+        /* Milestone 36: a client the boot-time setup loop never knew
+           about -- kernel/shell.c's `spawn` command launched it after
+           boot. */
+        handle_dynamic_request(msg);
+        break;
+    default:
+        break; /* not a client message shape this server understands yet */
+    }
+}
+
 int main(void)
 {
     uint64_t fb_info = sys_fb_acquire();
@@ -422,7 +637,7 @@ int main(void)
 
     init_chrome_buffer();
 
-    for (uint32_t i = 0; i < WINDOWS_TOTAL; i++) {
+    for (uint32_t i = 0; i < WINDOWS_BOOT_COUNT; i++) {
         ipc_message_t req;
         sys_ipc_recv(&req); /* blocks until this window's DISPLAY_OP_REQUEST arrives */
 
@@ -474,6 +689,8 @@ int main(void)
         sys_write("\n", 1);
     }
 
+    windows_used = WINDOWS_BOOT_COUNT; /* Milestone 36: from here on, every remaining slot is available for a dynamic spawn */
+
     sys_write(msg_all_ok, sizeof(msg_all_ok) - 1);
 
     /* Milestone 30/31: the persistent event loop -- this server never
@@ -484,28 +701,6 @@ int main(void)
     for (;;) {
         ipc_message_t msg;
         sys_ipc_recv(&msg);
-
-        uint64_t x = msg.fields[1];
-        uint64_t y = msg.fields[2];
-        switch (msg.fields[0]) {
-        case INPUT_EVENT_CLICK:
-            handle_click(x, y);
-            break;
-        case INPUT_EVENT_DRAG:
-            handle_drag(x, y);
-            break;
-        case INPUT_EVENT_RELEASE:
-            dragging_window = -1;
-            break;
-        case DISPLAY_OP_REDRAW:
-            /* Milestone 33: a client (the pulse app) wrote fresh
-               pixels into its ALREADY-mapped shm buffer and wants a
-               recomposite -- no per-window lookup needed, see this
-               file's own top-of-file comment for why. */
-            composite_all();
-            break;
-        default:
-            break; /* not a message shape this server understands yet */
-        }
+        dispatch_message(&msg);
     }
 }

@@ -17,14 +17,16 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 35 (2026-08-26)
+## State as of Milestone 36 (2026-08-26)
 
 **GUI arc COMPLETE** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
 with the user). Milestones 24-31 and 33 (below) are all seven of
-Desktop.md's own numbered items; Milestones 32, 34, and 35 are real
+Desktop.md's own numbered items; Milestones 32, 34, 35, and 36 are real
 follow-on work outside the arc's own numbering (all see their own
-entries below and `docs/roadmap.md`).
+entries below and `docs/roadmap.md`). Milestone 36 closes out every
+concrete GUI-arc-adjacent candidate this file's own "Reasonable next
+steps" section had raised.
 
 Milestone 32 also got a real follow-up fix this session: a genuine
 `#GP` under KVM while actually dragging a window, root-caused to the
@@ -447,8 +449,31 @@ the design reasoning and any real bugs found along the way.
     Milestone 34 established. Booted clean on the first real attempt;
     clean under real KVM through the identical close/exit/reap
     sequence. See ADR 0035.
+36. **Dynamic window creation** — the last concrete item this file's
+    own "Reasonable next steps" had flagged. `kernel/shell.c` gained a
+    `spawn pulse`/`spawn clock` command, launching a fresh instance of
+    an already-embedded program at runtime. `display_server.c`'s
+    window storage grew from a single compile-time constant to a
+    fixed-capacity array (8) plus a runtime `windows_used`, the same
+    bounded-array pattern the scheduler's own live-task registry and
+    the mouse driver's own event queues already established. Found and
+    fixed two real bugs in review before ever booting: a dynamic
+    spawn's own wait for its client's PRESENT needs to keep processing
+    unrelated messages (input is already flowing, unlike at boot), and
+    `INPUT_EVENT_*`/`DISPLAY_OP_*` turned out to share opcode values —
+    fixed by dispatching on `sender_pid == 0` (kernel-originated) first,
+    a verified existing invariant. Also root-caused a real QEMU
+    test-harness artifact (not a kernel bug — confirmed via a
+    kernel-side `fb_read_rect()` readback): an overlapping window
+    placement could show stale content in a screendump even though the
+    real framebuffer memory was already correct, so dynamic windows now
+    spawn in a gap clear of every boot-time window instead. Verified
+    with real PS/2 keystrokes spawning two windows, closing one (same
+    three-fact exit proof as Milestone 34), and confirming the other is
+    unaffected. Clean under real KVM through the full sequence. See ADR
+    0036.
 
-**Testing state:** 30 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+**Testing state:** 31 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Almost every milestone has its own dedicated smoke
 test (Milestone 24 is the one exception — see item 24 above for why
@@ -456,12 +481,20 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** twenty-nine
-milestones (9-35) all followed the same pattern — implement, boot in
-QEMU for real, fix what actually breaks, write the ADR describing what
-was tried and what was learned (including dead ends), commit in small
-logical pieces. Milestones 10-15, 17-19, 21-22, 24, 27, 29, 31, 34, and
-35 all landed correctly on the first real boot (Milestone 29's own real find
+**A note on process discipline that held up well:** thirty milestones
+(9-36) all followed the same pattern — implement, boot in QEMU for
+real, fix what actually breaks, write the ADR describing what was
+tried and what was learned (including dead ends), commit in small
+logical pieces. Milestone 36's own dynamic-spawn MECHANISM worked
+correctly the first time it booted — what took real diagnosis was a
+QEMU `-display none`/`screendump` staleness artifact discovered while
+verifying an overlapping window placement, root-caused (not guessed
+past) with a kernel-side `fb_read_rect()` readback proving the real
+framebuffer memory was already correct independent of what the
+screendump showed — the same "diagnose to the actual root cause, don't
+guess" discipline ADR 0032's own investigation already set. Milestones
+10-15, 17-19, 21-22, 24, 27, 29, 31, 34, and 35 all landed correctly on
+the first real boot (Milestone 29's own real find
 — a process blocking forever for external input would hang every OTHER
 test's reap-count gate — was caught in review, before ever booting, not
 from a live failure); Milestone 9 (per-process address spaces),
@@ -552,18 +585,15 @@ signal CLAUDE.md asks for before this territory gets touched.
 
 `Desktop.md`'s GUI arc (Milestones 24-31 and 33; Milestone 32 was a core
 correctness fix outside the arc's own numbering) is now COMPLETE — all
-seven of Desktop.md's own items are done. Milestone 34 (real client
-exit/close protocol, ADR 0034) and Milestone 35 (a real clock app, ADR
-0035) closed the two concrete items this section used to flag. There is
-no single obvious "next arc" the way the GUI arc was; what remains:
+seven of Desktop.md's own items are done. Milestones 34 (real client
+exit/close protocol, ADR 0034), 35 (a real clock app, ADR 0035), and 36
+(dynamic window creation, ADR 0036) closed every concrete item this
+section used to flag. There is no single obvious "next arc" the way
+the GUI arc was, and no un-flagged concrete candidate remains:
 
-- **Dynamic window creation** (spawning a NEW window/program instance
-  from the running shell, rather than every window being a fixed,
-  compile-time `WINDOWS_TOTAL` slot created once at boot). Would need a
-  general N-window `raise_to_top()`/hit-test (Milestone 33 already
-  generalized the shift logic, just not the fixed-slot array sizing) and
-  some real "launch a program" shell command.
-- A real path-based `execve` remains blocked on the filesystem non-goal.
+- A real path-based `execve` remains blocked on the filesystem non-goal
+  — the one remaining "launch an arbitrary program" gap, and it can't
+  be closed without that non-goal's own explicit go-ahead.
 
 A few smaller items outside that arc, not touching a non-goal:
 

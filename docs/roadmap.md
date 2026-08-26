@@ -1905,3 +1905,71 @@ resolution only (the RTC's own native granularity); no timezone
 handling (raw hardware time, unchanged `rtc_read()` contract); no date
 display, deliberately a clock and not a calendar; `WINDOWS_TOTAL` is
 still a fixed compile-time constant.
+
+## 36. Dynamic window creation
+
+The last concrete item `future.md`'s own "Reasonable next steps" had
+flagged after Milestone 35: launching a genuinely NEW window/program
+instance from the running shell, rather than every window being a
+fixed, compile-time slot created once at boot.
+
+**Deliverables:**
+- `kernel/shell.c` gained a `spawn pulse` / `spawn clock` command —
+  launches a fresh instance of an already-embedded program via
+  `task_create_user_image()`, injects a boot message plus a synthetic
+  `DISPLAY_OP_GO` (the one deliberate, narrow exception to
+  `display_protocol.h`'s "kernel never interprets these opcodes"
+  stance, now documented there), so both `pulse_app.c`/`clock_app.c`
+  reuse their existing go-signal wait completely unmodified.
+- `display_server.c`'s `windows[]`/`z_order[]` grew from a single
+  compile-time `WINDOWS_TOTAL` to a fixed-capacity array
+  (`WINDOWS_CAPACITY`=8) plus a runtime `windows_used` — the same
+  bounded-array pattern already established by the scheduler's own
+  live-task registry and the mouse driver's own event queues.
+  `composite_all()`/`hit_test()`/`raise_to_top()` needed exactly one
+  change each (read `windows_used` instead of the old constant).
+- New `handle_dynamic_request()` reuses the SAME REQUEST/GRANT/
+  PRESENT/ACK handshake the boot-time loop performs, now reachable
+  from the persistent event loop. Found and fixed two real bugs in
+  review before ever booting: (1) waiting for a specific client's
+  PRESENT while input is already flowing needs to keep processing
+  unrelated messages (a mouse click on an existing window), not
+  silently misread one as the new client's shm id — fixed via a new
+  shared `dispatch_message()` both the main loop and this wait use; (2)
+  `INPUT_EVENT_CLICK/DRAG/RELEASE` and `DISPLAY_OP_REQUEST/GRANT/
+  PRESENT` are two independently-numbered protocols that happen to
+  share opcode values 1/2/3 — never a collision before both needed
+  dispatching from the same switch. Fixed using a verified existing
+  invariant: kernel-originated input events always have `sender_pid ==
+  0` (confirmed by reading `input_router.c` directly), which no real
+  client can ever have.
+- A real, root-caused QEMU test-harness finding: an early version
+  placed dynamically spawned windows overlapping client B, and a
+  screendump-based smoke test intermittently showed stale content in
+  that region — a kernel-side `fb_read_rect()` readback taken
+  immediately after the same write proved the real framebuffer memory
+  was already correct, confirming this was a QEMU `-display none`/
+  `screendump` display-refresh artifact, not a kernel bug. Dynamic
+  windows now spawn in the genuinely empty gap between client B and
+  the pulse/clock apps instead, sidestepping the artifact.
+
+**Verification:** `tests/qemu/test_dynamic_spawn_selftest.sh` (new) —
+real PS/2 keystrokes (`sendkey`) type `spawn pulse`/`spawn clock`,
+confirm both windows genuinely render via screendump, then close one
+with a real injected click and confirm the same three-independent-
+facts exit proof Milestone 34 established, plus that the unrelated
+spawned window is unaffected. Booted clean under real KVM through the
+full spawn/spawn/close/exit/reap sequence, zero `#GP` faults. All
+thirty pre-existing smoke tests and all four host suites re-verified
+passing.
+**Design record:** `docs/adr/0036-dynamic-window-creation.md`.
+**Known limitations (accepted for this milestone only):**
+`WINDOWS_CAPACITY` fixed at 8 (4 boot + 4 dynamic), no slot reuse after
+a dynamic window closes; only `pulse`/`clock` are spawnable (a real
+path-based `execve` remains blocked on the filesystem non-goal); no
+"list running windows" command.
+
+This closes out `future.md`'s own concrete GUI-arc-adjacent candidates
+raised after Milestone 33. Remaining un-started work all requires
+explicit user go-ahead per CLAUDE.md's non-goals list (filesystem,
+ACPI power management, SMP, networking).

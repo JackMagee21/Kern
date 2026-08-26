@@ -13,8 +13,16 @@
    one, same "don't design for a hypothetical future requirement"
    stance kernel/ipc/ipc_message.h's own doc comment already takes.
    Lives under kernel/user/ (not kernel/ipc/, unlike ipc_message.h)
-   since the KERNEL never interprets these opcodes at all -- they're
-   meaningful only to these two specific userspace programs. */
+   since the KERNEL never interprets (branches on) these opcodes --
+   they're meaningful only to userspace programs that speak this
+   protocol. Milestone 36 (ADR 0036) added one narrow exception:
+   kernel/shell.c's `spawn` command CONSTRUCTS a DISPLAY_OP_GO message
+   (see that opcode's own doc comment) to hand a dynamically-launched
+   client the exact go-signal a peer client would otherwise have sent
+   it -- the kernel still never branches on what DISPLAY_OP_GO MEANS,
+   it just reuses the wire value so the spawned program's own
+   Milestone 33/35 go-signal wait needs no special-casing for how it
+   was started. */
 
 /* Client -> server. fields[1] = requested canvas width (pixels),
    fields[2] = requested canvas height (pixels), fields[3] unused. The
