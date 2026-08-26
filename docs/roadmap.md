@@ -1723,18 +1723,65 @@ permanently so a future, differently-shaped fault (e.g. a corrupted CS
 instead of SS) would at least be visible for investigation, not
 silently unexplained.
 
-## 33. Real applications (sequence TBD)
+## 33. Real applications (a genuinely persistent, self-redrawing window)
 
-Milestone 33 is intentionally left as a one-line placeholder here — full
-breakdown (deliverables/acceptance criteria/estimates/risks) gets written
-up when that milestone actually starts, not in advance, to avoid designing
-against assumptions already-implemented milestones might overturn. Next
-in sequence per `Desktop.md`'s GUI arc: a small number of genuinely
-different programs (not just tech-demo processes) — candidates: a
-clock, a simple text/log viewer, something interactive enough to prove
-the whole stack (compositing, input routing, chrome) works end to end
-for something a person would actually want to use. See `Desktop.md` for
-the full sequencing and `future.md` for the rest of this project's
-continuation briefing. Separately, still awaiting the user's decision:
-a disk driver + real filesystem, ACPI-based shutdown, and SMP/
-networking, all explicitly flagged non-goals.
+Desktop.md's own final GUI-arc item: "a small number of genuinely
+different programs... something interactive enough to prove input
+routing works end to end." Completed from the complementary angle
+Milestone 29-31 hadn't yet covered — not more input routing (already
+proven), but a real, LIVE application: one that keeps running and keeps
+changing what it shows, unlike every earlier client (A/B), which
+presented exactly once and exited.
+
+**Deliverables:**
+- `kernel/user/pulse_app.c` — a third window (`display_server.c`'s
+  `WINDOWS_TOTAL` raised 2 → 3), placed spatially disjoint from clients
+  A/B so every existing exact-pixel test assertion stays valid
+  unchanged. Requests a canvas, presents it once (same handshake as
+  A/B), then loops forever: paces with a `sys_nop` spin (matching
+  `fork_demo.asm`'s own bounded-loop precedent), rewrites its ALREADY-
+  mapped canvas with the next color in a small fixed palette, and pings
+  the server with the new `DISPLAY_OP_REDRAW` message.
+- `DISPLAY_OP_REDRAW` (`display_protocol.h`, opcode 6) — a no-fields
+  "recomposite everything" ping. The server's own handler is a single
+  `composite_all()` call; no new per-window state needed, since that
+  function already re-reads every window's stored `va` from scratch.
+- Joins client A → B's existing go-signal chain one link further (B
+  signals the pulse app once its own window has landed), keeping the
+  server's fixed per-slot `window_x/window_y` assignment deterministic
+  by construction, the same reasoning Milestone 28 established for A/B.
+- `raise_to_top()` generalized from a hardcoded 2-window swap to a real
+  shift loop — WINDOWS_TOTAL=3 exposed that the old swap was only ever
+  correct for exactly 2 windows.
+- Created in `kernel.c`'s "permanent process" zone (before the
+  frame-leak baseline), like the display server itself — this process
+  never exits during a normal boot.
+- Self-test accounting updated for real, hand-derived reasons, not
+  loosened defensively: `sys_fb_present` count self-test moved from
+  exact equality to a floor (`< 6`) since background redraws now happen
+  on a schedule no self-test can pin down exactly;
+  `DISPLAY_SERVER_PERMANENT_CANVAS_PAGES` raised 60 → 75 (a real,
+  derived 15-page addition — the pulse app's own canvas, permanently
+  held because IT never exits, not because of the server's second
+  reference like A/B's own 60-page deficit).
+**Verification:** `tests/qemu/test_pulse_app_selftest.sh` (new) —
+polls real repeated screendumps (no serial marker exists for "a redraw
+happened," by design) and confirms the sampled pixel genuinely changes
+color within a bounded window. All twenty-seven pre-existing smoke
+tests and all four host suites re-verified passing. 3 additional clean
+repeat boots under real KVM (ADR 0032), zero faults. One real
+regression found and fixed during verification: an early palette choice
+visually collided with an existing test's cursor-color matcher — caught
+by actually running the full suite, not assumed safe in advance.
+**Design record:** `docs/adr/0033-real-applications.md`.
+**Known limitations (accepted for this milestone only):** still a fixed
+`WINDOWS_TOTAL = 3`, no dynamic window creation or launching new
+programs from the shell; the pulse app is output-only (no click/drag/
+close handling of its own); its "animation" is a solid-color palette
+cycle, not real content — a real clock (once a `sys_*` time-reading
+syscall exists) or any app with genuine state is future work.
+
+This completes Desktop.md's own GUI arc (items 1-7). See `future.md`
+for this project's continuation briefing. Separately, still awaiting
+the user's decision: a disk driver + real filesystem, ACPI-based
+shutdown, and SMP/networking, all explicitly flagged non-goals.

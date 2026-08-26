@@ -30,12 +30,17 @@
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289u
 
-/* Milestone 30 (ADR 0030): see the process-lifecycle self-test's own
-   doc comment (below, where this is used) for the full derivation --
-   2 windows * ceil(200*150*4 / PMM_FRAME_SIZE) pages each, permanently
-   held by the (deliberately baseline-excluded) persistent display
-   server. */
-#define DISPLAY_SERVER_PERMANENT_CANVAS_PAGES 60u
+/* Milestone 30 (ADR 0030) / Milestone 33 (ADR 0033): see the
+   process-lifecycle self-test's own doc comment (below, where this is
+   used) for the full derivation -- 2 windows (clients A/B) *
+   ceil(200*150*4 / PMM_FRAME_SIZE) = 30 pages each, permanently held
+   by the (deliberately baseline-excluded) persistent display server's
+   own second reference, PLUS 1 window (the pulse app, Milestone 33) *
+   ceil(150*100*4 / PMM_FRAME_SIZE) = 15 pages, held permanently for a
+   slightly different reason -- not just the server's own second
+   reference, but the pulse app's OWN first reference too, since unlike
+   A/B it never exits either. 30 + 30 + 15 = 75. */
+#define DISPLAY_SERVER_PERMANENT_CANVAS_PAGES 75u
 
 extern const uint8_t fork_demo_image_start[]; /* kernel/user/embed/fork_demo_blob.asm: embedded build/kernel/user/fork_demo.elf */
 extern const uint8_t fork_demo_image_end[];
@@ -51,6 +56,8 @@ extern const uint8_t display_client_a_image_start[]; /* kernel/user/embed/displa
 extern const uint8_t display_client_a_image_end[];
 extern const uint8_t display_client_b_image_start[]; /* kernel/user/embed/display_client_b_blob.asm: embedded build/kernel/user/display_client_b.elf */
 extern const uint8_t display_client_b_image_end[];
+extern const uint8_t pulse_app_image_start[]; /* kernel/user/embed/pulse_app_blob.asm: embedded build/kernel/user/pulse_app.elf */
+extern const uint8_t pulse_app_image_end[];
 
 /* Milestone 6 self-test: two kernel threads that never voluntarily
    yield, proving the scheduler forcibly preempts a task that never
@@ -454,7 +461,23 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     scheduler_add_task(display_server_process);
     console_write("[OK] display server process created, pid 0x");
     console_write_hex(display_server_process->id);
-    console_write(" (persistent -- serves its two clients below, then waits forever for input)\n");
+    console_write(" (persistent -- serves its three clients below, then waits forever for input)\n");
+
+    /* Milestone 33 (ADR 0033): the pulse app -- created HERE too, in
+       this same "permanent process" zone, before the frame-leak
+       baseline just below, for exactly the same reason as the display
+       server itself just above: this process's own event loop never
+       returns during a normal boot (it keeps animating forever), so if
+       it were created AFTER the baseline like a normal bounded demo,
+       the reap-count self-test gate every other test depends on would
+       simply hang forever waiting for a reap that can't happen. Its
+       real work (request a canvas, present it, then loop redrawing)
+       only starts once preemption begins, same as the server. */
+    task_t *pulse_app_process = task_create_user_image(pulse_app_image_start, pulse_app_image_end);
+    scheduler_add_task(pulse_app_process);
+    console_write("[OK] pulse app process created, pid 0x");
+    console_write_hex(pulse_app_process->id);
+    console_write(" (persistent -- animates its own window forever once it joins the server)\n");
 
     /* Milestone 10 (ADR 0010) self-test setup: captured BEFORE either
        process exists, so that once both have exited and been fully
@@ -549,17 +572,21 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
 
     /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028) / Milestone 30
        (ADR 0030): a NINTH and TENTH orphan process -- Desktop.md's
-       display server's two clients. The server itself was already
-       created earlier (before the frame-leak baseline -- see that
-       creation site's own comment for why it's no longer created
-       here), so its pid is already known. CLIENT B is created before
-       CLIENT A, purely so client A's own bootstrap message (which
-       carries client B's pid, for the go-signal hand-off) can be built
-       here -- this is a compile-time/code-ordering constraint only,
-       NOT a scheduling one: client B cannot possibly act on anything
-       before client A's own go-signal arrives regardless of which of
-       the two the scheduler actually runs first (see
-       display_client_b.c's own comment). */
+       display server's first two (bounded, exiting) clients. The
+       server itself, and the pulse app (Milestone 33's own THIRD
+       client, but a PERSISTENT one, not counted here -- see its own
+       creation site's comment above), were already created earlier
+       (before the frame-leak baseline), so both pids are already
+       known. CLIENT B is created before CLIENT A, purely so client A's
+       own bootstrap message (which carries client B's pid, for the
+       go-signal hand-off) can be built here -- this is a compile-time/
+       code-ordering constraint only, NOT a scheduling one: client B
+       cannot possibly act on anything before client A's own go-signal
+       arrives regardless of which of the two the scheduler actually
+       runs first (see display_client_b.c's own comment). Client B's
+       own bootstrap message now also carries the pulse app's pid
+       (Milestone 33), so IT can forward the go-signal one more link
+       down the A -> B -> C chain once its own window has landed. */
     task_t *display_client_b_process = task_create_user_image(display_client_b_image_start, display_client_b_image_end);
     scheduler_add_task(display_client_b_process);
     task_t *display_client_a_process = task_create_user_image(display_client_a_image_start, display_client_a_image_end);
@@ -568,9 +595,13 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     if (!ipc_send(display_client_a_process, &display_a_boot_msg)) {
         panic("kernel_main: failed to inject display client A's own bootstrap message (inbox somehow already full)");
     }
-    ipc_message_t display_b_boot_msg = { .fields = { display_server_process->id, 0, 0, 0 } };
+    ipc_message_t display_b_boot_msg = { .fields = { display_server_process->id, pulse_app_process->id, 0, 0 } };
     if (!ipc_send(display_client_b_process, &display_b_boot_msg)) {
         panic("kernel_main: failed to inject display client B's own bootstrap message (inbox somehow already full)");
+    }
+    ipc_message_t pulse_app_boot_msg = { .fields = { display_server_process->id, 0, 0, 0 } };
+    if (!ipc_send(pulse_app_process, &pulse_app_boot_msg)) {
+        panic("kernel_main: failed to inject the pulse app's own bootstrap message (inbox somehow already full)");
     }
     console_write("[OK] display server/client processes created, server pid 0x");
     console_write_hex(display_server_process->id);
@@ -578,6 +609,8 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write_hex(display_client_a_process->id);
     console_write(", client B pid 0x");
     console_write_hex(display_client_b_process->id);
+    console_write(", pulse app pid 0x");
+    console_write_hex(pulse_app_process->id);
     console_write("\n");
 
     keyboard_init();
@@ -701,30 +734,40 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     while (scheduler_reaped_count() < 9) {
         __asm__ volatile("hlt");
     }
-    /* Milestone 30 (ADR 0030): a real, EXPECTED (not leaked) deficit
-       from this exact baseline now exists, for the first time since
-       this self-test was written (Milestone 10). The display server
-       (created BEFORE this baseline, so invisible to it) maps a SECOND,
-       genuinely live reference to each of its two clients' shm canvas
-       buffers (kernel/ipc/shm.c's own refcounting, ADR 0021/0026) so it
-       can recomposite them on a later raise -- and, being persistent,
-       NEVER drops that reference during a normal boot. Each granted
-       canvas is display_server.c's own MAX_CANVAS_W(200) *
-       MAX_CANVAS_H(150) * 4 bytes = 120000, ceil-divided by
-       PMM_FRAME_SIZE(4096) = 30 pages (duplicated here as a plain
-       constant, the same "both sides hardcode consistently" pattern
-       already used for MAX_CANVAS_W/H's own value in display_server.c
-       -- a struct-layout mismatch would be dangerous, matching two
-       plain integers by convention is not) -- 2 windows * 30 pages = 60
-       pages that will NEVER come back during a normal boot, precisely
-       and only because the OWNER holding that second reference was
-       deliberately excluded from this very baseline. This is NOT the
-       same thing as a leak: a leak is memory nothing can account for;
-       this is memory a specific, still-running, intentionally-excluded
-       process is still legitimately using. Checking for EXACTLY this
-       expected deficit (not a loose tolerance) keeps the self-test just
-       as strict as before at catching a REAL leak -- any other delta
-       still panics. */
+    /* Milestone 30 (ADR 0030) / Milestone 33 (ADR 0033): a real,
+       EXPECTED (not leaked) deficit from this exact baseline now
+       exists, for the first time since this self-test was written
+       (Milestone 10). The display server (created BEFORE this
+       baseline, so invisible to it) maps a SECOND, genuinely live
+       reference to each of its clients' shm canvas buffers
+       (kernel/ipc/shm.c's own refcounting, ADR 0021/0026) so it can
+       recomposite them on a later raise -- and, being persistent,
+       NEVER drops that reference during a normal boot. Clients A and
+       B's granted canvases are each display_server.c's own
+       MAX_CANVAS_W(200) * MAX_CANVAS_H(150) * 4 bytes = 120000,
+       ceil-divided by PMM_FRAME_SIZE(4096) = 30 pages each -- 60 pages
+       total that will never come back, precisely and only because the
+       server holding that second reference was deliberately excluded
+       from this baseline. Milestone 33 adds a THIRD, structurally
+       different case: the pulse app (kernel/user/pulse_app.c) is
+       ALSO persistent (also created before this baseline), so its own
+       canvas -- 150 * 100 * 4 = 60000 bytes, ceil-divided by
+       PMM_FRAME_SIZE(4096) = 15 pages -- never comes back either, not
+       because of the server's second reference (though that exists
+       too) but because the pulse app's OWN first reference is never
+       dropped, since it never exits. 60 + 15 = 75
+       (DISPLAY_SERVER_PERMANENT_CANVAS_PAGES, duplicated here as a
+       plain constant matching each source's own dimensions, the same
+       "both sides hardcode consistently" pattern already used for
+       MAX_CANVAS_W/H's own value in display_server.c -- a struct-layout
+       mismatch would be dangerous, matching plain integers by
+       convention is not). This is NOT the same thing as a leak: a leak
+       is memory nothing can account for; this is memory specific,
+       still-running, intentionally-excluded processes are still
+       legitimately using. Checking for EXACTLY this expected deficit
+       (not a loose tolerance) keeps the self-test just as strict as
+       before at catching a REAL leak -- any other delta still
+       panics. */
     uint64_t frames_after_reap = pmm_frames_free();
     uint64_t expected_frames_after_reap = frames_before_processes - DISPLAY_SERVER_PERMANENT_CANVAS_PAGES;
     if (frames_after_reap != expected_frames_after_reap) {
@@ -732,7 +775,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     }
     console_write("[OK] process lifecycle self-test passed, all ring-3 processes exited and were fully reaped (0x");
     console_write_hex(frames_after_reap);
-    console_write(" frames free, matches pre-creation baseline minus the display server's own two permanently-held canvas buffers)\n");
+    console_write(" frames free, matches pre-creation baseline minus the display server/pulse app's own permanently-held canvas buffers)\n");
 
     /* Milestone 20 (ADR 0020): proves sys_wait REALLY blocked at least
        once, not just that it eventually returned the right answer --
@@ -796,25 +839,34 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr)
     console_write(" turns) before the sender's message arrived\n");
 
     /* Milestone 27 (ADR 0027) / Milestone 28 (ADR 0028) / Milestone 31
-       (ADR 0031): proves sys_fb_present genuinely blitted into the
-       real framebuffer, not just that the display server/clients' own
-       success markers printed above -- the same "prove the new
-       syscall path was actually exercised, not just correct by luck"
-       pattern syscall_get_exec_count()/syscall_get_ipc_recv_block_count()
-       already established. Checks for EXACTLY 4, not just ">0": TWO
-       calls per window now (Milestone 31 added a server-drawn title
-       bar, presented separately from the client's own canvas,
-       kernel/user/display_server.c's own present_window()) -- a count
-       lower than 4 would mean some window's chrome or canvas silently
-       never landed even though its own success marker might still have
-       printed for some other reason. The ACTUAL pixel-level proof that
-       both windows landed at the right place, at the right
-       (bound-enforced) size, in the right z-order, and nowhere else,
-       is tests/qemu/test_display_server_selftest.sh's own real QEMU
-       screendump check -- this counter only proves the syscalls ran,
-       not where they drew. */
-    if (syscall_get_fb_present_count() != 4) {
-        panic("display server self-test failed: sys_fb_present did not blit exactly 4 frames (some window's chrome or canvas landed silently, or too many)");
+       (ADR 0031) / Milestone 33 (ADR 0033): proves sys_fb_present
+       genuinely blitted into the real framebuffer, not just that the
+       display server/clients' own success markers printed above --
+       the same "prove the new syscall path was actually exercised,
+       not just correct by luck" pattern syscall_get_exec_count()/
+       syscall_get_ipc_recv_block_count() already established. TWO
+       calls per window (Milestone 31 added a server-drawn title bar,
+       presented separately from the client's own canvas,
+       kernel/user/display_server.c's own present_window()), THREE
+       windows now (Milestone 33 added the pulse app) -- so the initial
+       setup loop alone always produces AT LEAST 6. Checks "< 6", not
+       "!= 6": unlike every earlier window, the pulse app keeps
+       redrawing itself in the background (DISPLAY_OP_REDRAW,
+       display_server.c), and each such redraw recomposites all THREE
+       windows again (composite_all(), 6 more presents) -- whether zero,
+       one, or several of those have already happened by the exact
+       moment this check runs depends on real scheduling timing, so an
+       exact count would be non-deterministic. "< 6" stays just as
+       strict at catching a REAL failure (some window's chrome or
+       canvas silently never landing during initial setup) while
+       correctly tolerating any number of legitimate extra redraws. The
+       ACTUAL pixel-level proof that every window lands at the right
+       place, at the right (bound-enforced) size, in the right z-order,
+       and nowhere else, is tests/qemu/test_display_server_selftest.sh's
+       own real QEMU screendump check -- this counter only proves the
+       syscalls ran, not where they drew. */
+    if (syscall_get_fb_present_count() < 6) {
+        panic("display server self-test failed: sys_fb_present blitted fewer than 6 frames (some window's chrome or canvas landed silently, or too few)");
     }
     console_write("[OK] display server self-test passed, sys_fb_present blitted 0x");
     console_write_hex(syscall_get_fb_present_count());

@@ -35,7 +35,20 @@
    the button is held and the cursor is moving) repositions whichever
    window a drag is in progress for, clamped to stay fully on screen
    and below the console's own reserved region (Milestone 30's own
-   fix). INPUT_EVENT_RELEASE ends the drag. */
+   fix). INPUT_EVENT_RELEASE ends the drag.
+
+   Milestone 33 (ADR 0033) adds the third window this server ever
+   serves -- kernel/user/pulse_app.c, the first client in this whole
+   project that keeps running indefinitely and keeps CHANGING what it
+   draws, not just presenting once and exiting (clients A and B).
+   DISPLAY_OP_REDRAW (display_protocol.h) is the new message this
+   needs: a client that already completed its own REQUEST/PRESENT/ACK
+   handshake, sent any number of further times to mean "recomposite
+   everything -- I just wrote fresh pixels into the SAME shm buffer you
+   already have mapped." Handling it needs no new per-window state at
+   all: composite_all() already re-reads every window's stored `va`
+   from scratch on every call, so whatever the client most recently
+   wrote is picked up automatically. */
 
 #include <stdint.h>
 
@@ -70,17 +83,24 @@
    position; dragging must not be able to undo that fix. */
 #define FBCONSOLE_MAX_HEIGHT_PX 480u
 
-/* Milestone 30 (ADR 0030): a fixed cascade placement, one entry per
-   client, in the exact order this server expects to serve them
-   (client A first, client B second -- enforced by the go-signal
-   hand-off, not assumed). Window 1 is offset (+50, +50) from window 0
-   so their granted 200x150/200x150 canvases genuinely overlap (a
-   150x100 shared region). y >= FBCONSOLE_MAX_HEIGHT_PX + CHROME_H so
-   even each window's OWN title bar starts outside the console's
-   reserved scroll region from the moment it's first drawn. */
-#define WINDOWS_TOTAL 2u
-static const uint32_t window_x[WINDOWS_TOTAL] = { 100u, 150u };
-static const uint32_t window_y[WINDOWS_TOTAL] = { 500u, 550u };
+/* Milestone 30 (ADR 0030) / Milestone 33 (ADR 0033): a fixed cascade
+   placement, one entry per client, in the exact order this server
+   expects to serve them (client A first, client B second, the pulse
+   app third -- enforced by the A->B->C go-signal chain, not assumed).
+   Window 1 is offset (+50, +50) from window 0 so their granted
+   200x150/200x150 canvases genuinely overlap (a 150x100 shared
+   region) -- windows A/B's own exact-pixel test assertions
+   (tests/qemu/test_display_server_selftest.sh, test_window_chrome_
+   selftest.sh) depend on this pair's geometry exactly as before.
+   Window 2 (the pulse app) is placed well clear of both -- x=650
+   leaves a wide gap past window 1's own rightmost extent (150 + 200 =
+   350), so it never overlaps A or B and can't perturb either test's
+   pixel counts. y >= FBCONSOLE_MAX_HEIGHT_PX + CHROME_H so even each
+   window's OWN title bar starts outside the console's reserved scroll
+   region from the moment it's first drawn. */
+#define WINDOWS_TOTAL 3u
+static const uint32_t window_x[WINDOWS_TOTAL] = { 100u, 150u, 650u };
+static const uint32_t window_y[WINDOWS_TOTAL] = { 500u, 550u, 520u };
 
 /* Milestone 30: each window's full state, kept alive for the server's
    ENTIRE (persistent) lifetime -- recompositing on a raise/drag needs
@@ -215,19 +235,25 @@ static int hit_test(uint64_t px, uint64_t py, int *out_region)
     return -1;
 }
 
-/* WINDOWS_TOTAL is fixed at 2, so "raise the window at z_order
-   position 0" always means "swap with position 1" -- written this way
-   (rather than a general shift loop) since a loop would never actually
-   exercise more than this one case, matching CLAUDE.md's "don't build
-   machinery you don't need" stance for a fixed, small N. */
+/* Milestone 33 (ADR 0033): a general shift, not a fixed 2-element
+   swap -- WINDOWS_TOTAL is now 3, and a 2-element swap is simply wrong
+   for raising a window out of the BOTTOM of a 3-deep stack (it would
+   only ever exchange positions 0 and 1, never actually reaching the
+   top). Shifts every window ABOVE hit_pos down by one slot, then
+   places the raised window at the very top -- reduces to the exact
+   same swap as before whenever hit_pos == 0 and WINDOWS_TOTAL == 2, so
+   this isn't a behavior change for that case, just a correct
+   generalization for N > 2. */
 static void raise_to_top(int hit_pos)
 {
     if ((uint32_t)hit_pos == WINDOWS_TOTAL - 1) {
         return; /* already topmost */
     }
-    uint32_t tmp = z_order[0];
-    z_order[0] = z_order[1];
-    z_order[1] = tmp;
+    uint32_t raised = z_order[hit_pos];
+    for (uint32_t i = (uint32_t)hit_pos; i < WINDOWS_TOTAL - 1; i++) {
+        z_order[i] = z_order[i + 1];
+    }
+    z_order[WINDOWS_TOTAL - 1] = raised;
     composite_all();
 
     sys_write(msg_raised, sizeof(msg_raised) - 1);
@@ -434,6 +460,13 @@ int main(void)
             break;
         case INPUT_EVENT_RELEASE:
             dragging_window = -1;
+            break;
+        case DISPLAY_OP_REDRAW:
+            /* Milestone 33: a client (the pulse app) wrote fresh
+               pixels into its ALREADY-mapped shm buffer and wants a
+               recomposite -- no per-window lookup needed, see this
+               file's own top-of-file comment for why. */
+            composite_all();
             break;
         default:
             break; /* not a message shape this server understands yet */

@@ -68,4 +68,23 @@
    used. */
 #define DISPLAY_OP_ACK 5
 
+/* Milestone 33 (ADR 0033): client -> server, sent any number of times
+   AFTER a client's own initial DISPLAY_OP_REQUEST/PRESENT/ACK
+   handshake has already completed -- the first message this protocol
+   has ever needed for a client that keeps running (every earlier
+   client presented exactly once, then exited). No fields used: the
+   client has ALREADY written fresh pixel data into the SAME
+   shared-memory buffer it originally handed over (still mapped at the
+   same address, sys_shm_map() was never repeated -- a client re-maps
+   nothing, it just keeps writing into what it already owns), so this
+   message means only "re-composite everything -- my content changed."
+   The server doesn't need to know WHICH window sent this or even look
+   it up: since every window's own stored `va` already points at
+   whatever that client most recently wrote, kernel/user/
+   display_server.c's own composite_all() naturally picks up the fresh
+   content for free, the same "opaque windows, painted bottom-to-top"
+   reasoning Milestone 28 already established -- no new per-window
+   bookkeeping needed at all. */
+#define DISPLAY_OP_REDRAW 6
+
 #endif /* KERNEL_USER_DISPLAY_PROTOCOL_H */

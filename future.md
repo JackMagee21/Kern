@@ -17,13 +17,14 @@ and grew, milestone by milestone, into a preemptive multi-process
 kernel with per-process address spaces, NX/guard-page hardening, and a
 handful of real hardware drivers.
 
-## State as of Milestone 32 (2026-08-26)
+## State as of Milestone 33 (2026-08-26)
 
-**GUI arc in progress** — see `Desktop.md` for the full multi-milestone
+**GUI arc COMPLETE** — see `Desktop.md` for the full multi-milestone
 plan (multi-window desktop, filesystem staying a non-goal, confirmed
-with the user). Milestones 24-31 (below) are the first eight steps;
-Milestone 32 is a core correctness fix outside the GUI arc's own
-numbering (see its own entry below and `docs/roadmap.md`).
+with the user). Milestones 24-31 and 33 (below) are all seven of
+Desktop.md's own numbered items; Milestone 32 is a core correctness fix
+outside the GUI arc's own numbering (see its own entry below and
+`docs/roadmap.md`).
 
 **Real KVM acceleration is now safe and enabled** (`make run`/`make
 debug`, when `/dev/kvm` is accessible) — Milestone 32 found and fixed a
@@ -33,8 +34,12 @@ before. `make run` now grabs the mouse automatically (GTK
 own native-Wayland relative-pointer support is unreliable) for
 Milestone 31's own draggable windows.
 As of Milestone 31, per the user's own explicit request, booting
-through the `[OK]` self-checks now leads into a real, interactive GUI:
-two windows with title bars, draggable and closable with the mouse.
+through the `[OK]` self-checks leads into a real, interactive GUI: two
+windows with title bars, draggable and closable with the mouse.
+Milestone 33 added a THIRD window that stays alive and keeps redrawing
+itself forever — the first genuinely persistent, self-updating
+application this kernel has ever run, completing Desktop.md's own final
+GUI-arc item.
 
 Everything below is DONE, verified via actual QEMU boots (not just
 compiled), and committed. Read `docs/roadmap.md` for the full list with
@@ -364,8 +369,41 @@ the design reasoning and any real bugs found along the way.
     safe regardless of the hypervisor's own reason for the corruption.
     `make run`/`make debug` now enable KVM conditionally (checked at
     `make` time, not hardcoded). See ADR 0032.
+33. **Real applications** — Desktop.md's own final GUI-arc item,
+    completed. `kernel/user/pulse_app.c`, a THIRD window, spatially
+    disjoint from clients A/B so no existing exact-pixel test needed to
+    change, proves the one property no earlier client ever had to:
+    staying alive and genuinely changing its own on-screen content
+    forever, not just presenting once and exiting. One new no-fields
+    protocol message (`DISPLAY_OP_REDRAW`) was all the server needed —
+    `composite_all()` already re-reads every window's current content
+    from scratch, so no new per-window bookkeeping was required. Paced
+    with a plain `sys_nop` spin (matching `fork_demo.asm`'s own
+    bounded-loop precedent) cycling a small fixed color palette.
+    `raise_to_top()` generalized from a hardcoded 2-window swap to a
+    real shift loop, exposed as genuinely wrong (not just narrow) once
+    `WINDOWS_TOTAL` became 3. Self-test accounting changed for real,
+    derived reasons: `sys_fb_present`'s count check moved from exact
+    equality to a floor (background redraws now happen on a schedule no
+    self-test can pin down exactly), and the frame-leak baseline's
+    permanent-deficit constant grew by a real, hand-derived 15 pages (the
+    pulse app's own canvas, held forever because IT never exits — a
+    different reason than clients A/B's own 60-page deficit, which
+    exists because the SERVER never drops its reference to theirs).
+    Proven with a genuinely new kind of smoke test
+    (`test_pulse_app_selftest.sh`): since the server's `DISPLAY_OP_REDRAW`
+    handler deliberately logs nothing, there's no serial marker for "a
+    redraw happened" — the test instead polls real repeated screendumps
+    until the sampled pixel's color genuinely changes, the first test in
+    this suite to synchronize on pixel state directly rather than a log
+    line. One real regression found and fixed during verification: an
+    early palette choice's near-red entry visually collided with
+    `test_framebuffer_selftest.sh`'s existing whole-screen cursor-color
+    scan (built when only an 8x8 sprite could ever be that shade) —
+    caught by actually running the full regression suite, not assumed
+    safe in advance. See ADR 0033.
 
-**Testing state:** 27 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
+**Testing state:** 28 QEMU smoke tests (`tests/qemu/*.sh`), 4 host unit
 test suites (`tests/host/*.c`, run with ASan/UBSan), all passing as of
 the last commit. Almost every milestone has its own dedicated smoke
 test (Milestone 24 is the one exception — see item 24 above for why
@@ -373,8 +411,8 @@ reusing two existing tests unchanged was strictly stronger proof); run
 `make run` for an interactive boot or any `tests/qemu/test_*.sh`
 individually for a specific milestone's proof.
 
-**A note on process discipline that held up well:** twenty-six
-milestones (9-32) all followed the same pattern — implement, boot in
+**A note on process discipline that held up well:** twenty-seven
+milestones (9-33) all followed the same pattern — implement, boot in
 QEMU for real, fix what actually breaks, write the ADR describing what
 was tried and what was learned (including dead ends), commit in small
 logical pieces. Milestones 10-15, 17-19, 21-22, 24, 27, 29, and 31 all
@@ -467,18 +505,34 @@ signal CLAUDE.md asks for before this territory gets touched.
 
 ## Reasonable next steps (not flagged, not started)
 
-The main line of "what's next" is now `Desktop.md`'s GUI arc (Milestones
-24-31 done, Milestone 32 was a core correctness fix outside the arc's
-own numbering; Milestone 33 = real applications — a small number of
-genuinely different programs, not tech-demo processes, to actually use
-inside the now-draggable/closable windows). Note: closing a window
-currently doesn't reclaim its client process/shm reference (ADR 0031's
-own Known limitations) — fine for the current one-shot demo clients
-(already exited by the time a close is even possible), but a REAL
-close protocol (telling a still-running client to exit) will be needed
-once Milestone 33's own long-running apps exist. A real path-based
-`execve` remains blocked on the filesystem non-goal, which `Desktop.md`'s
-scope confirmation keeps deferred for this whole arc.
+`Desktop.md`'s GUI arc (Milestones 24-31 and 33; Milestone 32 was a core
+correctness fix outside the arc's own numbering) is now COMPLETE — all
+seven of Desktop.md's own items are done. There is no single obvious
+"next arc" the way the GUI arc was; a few concrete candidates, none
+flagged as a non-goal, none started:
+
+- **A real client exit/close protocol.** Closing a window still doesn't
+  reclaim its client process/shm reference (ADR 0031's own Known
+  limitations, still true after Milestone 33) — harmless for A/B (they
+  already exit on their own long before a close is even possible), but
+  the pulse app (Milestone 33) is the first client that could actually
+  still be running when its window is closed, and today closing its
+  window leaves its process spinning forever with nothing displaying
+  it. A real "tell a still-running client to exit, then the server
+  actually drops its own `shm_map()` reference" protocol is the natural
+  next piece of GUI-arc-adjacent work, even though it's not one of
+  Desktop.md's own seven numbered items.
+- **Dynamic window creation** (spawning a NEW window/program instance
+  from the running shell, rather than every window being a fixed,
+  compile-time `WINDOWS_TOTAL` slot created once at boot). Would need a
+  general N-window `raise_to_top()`/hit-test (Milestone 33 already
+  generalized the shift logic, just not the fixed-slot array sizing) and
+  some real "launch a program" shell command.
+- **A real clock app**, now that the pulse app has proven a persistent,
+  self-redrawing window works end to end — blocked only on a `sys_*`
+  wrapper for `kernel/drivers/rtc.c`'s existing (kernel-only) `rtc_read()`,
+  a small, well-scoped addition.
+- A real path-based `execve` remains blocked on the filesystem non-goal.
 
 A few smaller items outside that arc, not touching a non-goal:
 

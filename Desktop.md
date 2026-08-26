@@ -187,10 +187,24 @@ each one is needed now, not a deliverables list.
    where it starts feeling like a desktop rather than a windowing demo
    -- per the user's own explicit request, booting through the `[OK]`
    self-checks now leads into a real, interactive GUI.
-7. **Real applications.** A small number of genuinely different
-   programs (not just tech-demo processes) — candidates: a clock, a
-   simple text/log viewer, something interactive enough to prove input
-   routing actually works end to end.
+7. **Real applications -- DONE (Milestone 33, ADR 0033).** A third
+   window (`kernel/user/pulse_app.c`), spatially disjoint from clients
+   A/B so no existing exact-pixel test needed to change, that proves
+   the property no earlier client ever had to: staying alive and
+   genuinely CHANGING its own on-screen content, not just presenting
+   once and exiting. One new no-fields protocol message
+   (`DISPLAY_OP_REDRAW`) is all the server needed -- `composite_all()`
+   already re-reads every window's current content from scratch, so no
+   new per-window bookkeeping was required. Paced with a plain
+   `sys_nop` spin (matching `fork_demo.asm`'s own bounded-loop
+   precedent) cycling a small fixed color palette, proven live via a
+   new test that polls real screendumps until the sampled pixel
+   genuinely changes color -- there's no serial marker for "a redraw
+   happened" by design, so this is the first smoke test in this suite
+   to synchronize on pixel state directly rather than a log line. This
+   completes the GUI arc: after boot's `[OK]` self-checks, a real,
+   interactive, MULTI-APPLICATION desktop is on screen, exactly per the
+   user's original request.
 
 ## Verification approach (per layer)
 

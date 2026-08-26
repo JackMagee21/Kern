@@ -1,11 +1,17 @@
-/* Milestone 28 (ADR 0028): the SECOND of two clients
-   kernel/user/display_server.c now serves. Waits for client A's own
-   DISPLAY_OP_GO (kernel/user/display_client_a.c) before ever sending
-   its own DISPLAY_OP_REQUEST -- guaranteeing, by construction, that
-   client A's window is fully presented before this one's request even
-   reaches the server, so the resulting z-order (this window ends up
-   drawn ON TOP of client A's, in the region where the server's cascade
-   placement makes them overlap) is deterministic, not a race. */
+/* Milestone 28 (ADR 0028): the SECOND of what is now three clients
+   (Milestone 33, ADR 0033) kernel/user/display_server.c serves. Waits
+   for client A's own DISPLAY_OP_GO (kernel/user/display_client_a.c)
+   before ever sending its own DISPLAY_OP_REQUEST -- guaranteeing, by
+   construction, that client A's window is fully presented before this
+   one's request even reaches the server, so the resulting z-order
+   (this window ends up drawn ON TOP of client A's, in the region where
+   the server's cascade placement makes them overlap) is deterministic,
+   not a race.
+
+   Milestone 33: once THIS window has landed, forwards the exact same
+   go-signal on to kernel/user/pulse_app.c -- extending the A -> B -> C
+   chain by one more link, the same reasoning as client A's own
+   go-signal to this process, just one hop further down. */
 
 #include <stdint.h>
 
@@ -28,8 +34,9 @@ static const char msg_go_bad[] = "[FAIL] display client B: go-signal from client
 int main(void)
 {
     ipc_message_t boot;
-    sys_ipc_recv(&boot); /* kernel_main's own bootstrap message: fields[0] = the display server's pid */
+    sys_ipc_recv(&boot); /* kernel_main's own bootstrap message: fields[0] = the display server's pid, fields[1] = the pulse app's pid (Milestone 33) */
     uint64_t server_pid = boot.fields[0];
+    uint64_t pulse_app_pid = boot.fields[1];
 
     ipc_message_t go;
     sys_ipc_recv(&go); /* blocks until client A's DISPLAY_OP_GO arrives -- client A's own window is guaranteed already on screen by then, see display_client_a.c */
@@ -86,5 +93,13 @@ int main(void)
     sys_ipc_recv(&ack); /* waits for the server's own confirmation this canvas actually landed on screen -- see display_client_a.c's identical comment */
 
     sys_write(msg_ok, sizeof(msg_ok) - 1);
+
+    /* Milestone 33: only sent after the ack above -- the pulse app's
+       own DISPLAY_OP_REQUEST cannot possibly reach the server before
+       this, extending client A's own z-order-determinism guarantee one
+       more link down the chain. */
+    ipc_message_t go_c = { .fields = { DISPLAY_OP_GO, 0, 0, 0 } };
+    sys_ipc_send(pulse_app_pid, &go_c);
+
     return 0;
 }
